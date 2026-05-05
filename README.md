@@ -108,7 +108,7 @@ mvn clean install    # Build and install to local Maven repo
 Requires:
 - Java 21+
 - Maven 3.9+
-- Axon Framework 5.2.0-SNAPSHOT installed locally
+- Axon Framework 5.1.0 or newer 5.x compatible APIs
 
 ## Published Package
 
