@@ -108,9 +108,9 @@ mvn clean install    # Build and install to local Maven repo
 Requires:
 - Java 21+
 - Maven 3.9+
-- Axon Framework 5.0.5
+- Axon Framework 5.1.0
 
-Axon Framework 5.1.0 moved the distributed command/query connector APIs to Axoniq Framework. This connector currently pins to Axon Framework 5.0.5, the last release line that still exposes those APIs from the Apache-licensed Axon Framework artifacts. The connector should vendor or replace those distributed connector contracts before moving to Axon Framework 5.1+.
+Axon Framework 5.1.0 moved the distributed command/query connector APIs to Axoniq Framework. This connector vendors the small Apache-licensed connector contracts and payload-converting decorators from Axon Framework 5.0.5 so downstream projects do not need Axoniq Framework just to use the KronosDB connector.
 
 ## Published Package
 
