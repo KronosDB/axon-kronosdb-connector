@@ -114,23 +114,23 @@ Axon Framework 5.1.0 moved the distributed command/query connector APIs to Axoni
 
 ## Published Package
 
-Packages are published to GitHub Packages from the `main` branch and `v*` tags.
+Public builds are available through JitPack from the connector's Git tags.
 
 Maven:
 
 ```xml
 <repositories>
     <repository>
-        <id>github</id>
-        <url>https://maven.pkg.github.com/KronosDB/axon-kronosdb-connector</url>
+        <id>jitpack.io</id>
+        <url>https://jitpack.io</url>
     </repository>
 </repositories>
 
 <dependencies>
     <dependency>
-        <groupId>io.kronosdb</groupId>
+        <groupId>com.github.KronosDB</groupId>
         <artifactId>axon-kronosdb-connector</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>v0.1.0</version>
     </dependency>
 </dependencies>
 ```
@@ -139,21 +139,13 @@ Gradle:
 
 ```kotlin
 repositories {
-    maven {
-        url = uri("https://maven.pkg.github.com/KronosDB/axon-kronosdb-connector")
-        credentials {
-            username = findProperty("gpr.user") as String? ?: System.getenv("GITHUB_ACTOR")
-            password = findProperty("gpr.key") as String? ?: System.getenv("GITHUB_TOKEN")
-        }
-    }
+    maven("https://jitpack.io")
 }
 
 dependencies {
-    implementation("io.kronosdb:axon-kronosdb-connector:0.1.0-SNAPSHOT")
+    implementation("com.github.KronosDB:axon-kronosdb-connector:v0.1.0")
 }
 ```
-
-GitHub Packages may require a GitHub token with `read:packages` when resolving packages from another project.
 
 ## Configuration
 
