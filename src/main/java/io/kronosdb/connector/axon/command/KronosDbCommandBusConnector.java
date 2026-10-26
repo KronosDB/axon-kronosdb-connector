@@ -1,14 +1,14 @@
 package io.kronosdb.connector.axon.command;
 
 import io.kronosdb.connector.axon.KronosDbConfiguration;
-import io.kronosdb.connector.grpc.KronosDbConnection;
-import io.kronosdb.connector.grpc.Registration;
-import io.kronosdb.grpc.command.Command;
-import io.kronosdb.grpc.command.CommandResponse;
+import io.kronosdb.connector.transport.KronosDbConnection;
+import io.kronosdb.connector.transport.Registration;
+import io.kronosdb.protocol.Command;
+import io.kronosdb.protocol.CommandResult;
 import org.axonframework.common.infra.ComponentDescriptor;
 import org.axonframework.messaging.commandhandling.CommandMessage;
 import org.axonframework.messaging.commandhandling.CommandResultMessage;
-import org.axonframework.messaging.commandhandling.distributed.CommandBusConnector;
+import io.kronosdb.connector.axon.distributed.command.CommandBusConnector;
 import org.axonframework.messaging.core.QualifiedName;
 import org.axonframework.messaging.core.conversion.MessageConverter;
 import org.axonframework.messaging.core.unitofwork.ProcessingContext;
@@ -79,12 +79,12 @@ public class KronosDbCommandBusConnector implements CommandBusConnector {
         return completion;
     }
 
-    private CompletableFuture<CommandResponse> handle(Command command) {
-        logger.debug("Received incoming command [{}].", command.getName());
+    private CompletableFuture<CommandResult> handle(Command command) {
+        logger.debug("Received incoming command [{}].", command.name());
         try {
-            CompletableFuture<CommandResponse> result = new CompletableFuture<CommandResponse>()
-                    .whenComplete((r, e) -> commandsInProgress.remove(command.getMessageIdentifier()));
-            commandsInProgress.put(command.getMessageIdentifier(), result);
+            CompletableFuture<CommandResult> result = new CompletableFuture<>();
+            result.whenComplete((r, e) -> commandsInProgress.remove(command.messageId()));
+            commandsInProgress.put(command.messageId(), result);
 
             requireNonNull(incomingHandler, "incomingHandler not configured")
                     .handle(CommandConverter.convertCommand(command, converter),
@@ -92,8 +92,8 @@ public class KronosDbCommandBusConnector implements CommandBusConnector {
 
             return result;
         } catch (Exception e) {
-            logger.error("Error processing incoming command: {}", command.getName(), e);
-            commandsInProgress.remove(command.getMessageIdentifier());
+            logger.error("Error processing incoming command: {}", command.name(), e);
+            commandsInProgress.remove(command.messageId());
             return CompletableFuture.failedFuture(e);
         }
     }
@@ -136,18 +136,18 @@ public class KronosDbCommandBusConnector implements CommandBusConnector {
     }
 
     private record FutureResultCallback(
-            CompletableFuture<CommandResponse> result,
+            CompletableFuture<CommandResult> result,
             Command command
     ) implements ResultCallback {
 
         @Override
         public void onSuccess(@Nullable CommandResultMessage resultMessage) {
-            result.complete(CommandConverter.convertResultMessage(resultMessage, command.getMessageIdentifier()));
+            result.complete(CommandConverter.convertResultMessage(resultMessage, command.messageId()));
         }
 
         @Override
         public void onError(Throwable cause) {
-            logger.info("Command [{}] raised an exception: {}", command.getName(), cause.getMessage());
+            logger.info("Command [{}] raised an exception: {}", command.name(), cause.getMessage());
             result.completeExceptionally(cause);
         }
     }

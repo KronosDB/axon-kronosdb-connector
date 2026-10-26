@@ -1,8 +1,8 @@
 package io.kronosdb.connector.axon.event;
 
-import io.kronosdb.connector.grpc.PlatformChannel;
-import io.kronosdb.connector.grpc.PlatformChannel.ProcessorInstruction;
-import io.kronosdb.grpc.platform.EventProcessorInfo;
+import io.kronosdb.connector.transport.PlatformChannel;
+import io.kronosdb.connector.transport.PlatformChannel.ProcessorInstruction;
+import io.kronosdb.protocol.ProcessorStatus;
 import org.axonframework.common.configuration.Configuration;
 import org.axonframework.messaging.eventhandling.processing.EventProcessor;
 import org.axonframework.messaging.eventhandling.processing.streaming.StreamingEventProcessor;
@@ -21,7 +21,7 @@ import java.util.function.Supplier;
  * Service that reports event processor status to KronosDB and handles
  * server-initiated processor instructions (pause, start, split, merge, release).
  * <p>
- * Mirrors the Axon Server connector's {@code EventProcessorControlService}.
+ * Processor control is server-initiated; this is the client-side endpoint.
  * On {@link #start()}, it registers all event processors with the platform channel,
  * sets up periodic status reporting, and installs an instruction handler that
  * delegates to the appropriate processor.
@@ -80,7 +80,7 @@ public class EventProcessorControlService {
     private void reportAll(Map<String, EventProcessor> processors) {
         for (EventProcessor processor : processors.values()) {
             try {
-                EventProcessorInfo info = describeProcessor(processor);
+                ProcessorStatus info = describeProcessor(processor);
                 platformChannel.sendEventProcessorInfo(info);
             } catch (Exception e) {
                 logger.debug("Failed to report processor [{}] status.", processor.name(), e);
@@ -88,7 +88,7 @@ public class EventProcessorControlService {
         }
     }
 
-    private EventProcessorInfo describeProcessor(EventProcessor processor) {
+    private ProcessorStatus describeProcessor(EventProcessor processor) {
         if (processor instanceof StreamingEventProcessor streaming) {
             return EventProcessorInfoUtils.describeStreaming(streaming);
         } else if (processor instanceof SubscribingEventProcessor subscribing) {

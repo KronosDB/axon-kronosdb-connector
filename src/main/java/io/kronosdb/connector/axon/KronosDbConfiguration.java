@@ -13,16 +13,12 @@ public class KronosDbConfiguration {
 
     private String servers = "localhost:50051";
     private String context = "default";
+    private @Nullable String busName;
     private String clientId = UUID.randomUUID().toString();
     private String componentName = "Unnamed";
     private @Nullable String token;
     private boolean sslEnabled = false;
     private @Nullable String certFile;
-    private int commandLoadFactor = 100;
-
-    // Flow control
-    private int commandFlowControlPermits = 5000;
-    private int queryFlowControlPermits = 5000;
 
     // Keep-alive
     private long keepAliveTime = 1000;
@@ -33,12 +29,11 @@ public class KronosDbConfiguration {
     private long heartbeatInterval = 5000;
     private long heartbeatTimeout = 15000;
 
-    // Connection
-    private long connectTimeout = 5000;
-    private long reconnectInterval = 2000;
-
     // Message size
     private int maxMessageSize = 4 * 1024 * 1024; // 4MB
+
+    // How long a query may take; 0 leaves it to the server's [timeouts] query.
+    private long queryTimeoutMillis = 0;
 
     public KronosDbConfiguration() {
     }
@@ -59,6 +54,20 @@ public class KronosDbConfiguration {
 
     public void setContext(String context) {
         this.context = context;
+    }
+
+    /**
+     * Messaging bus for command, query, and subscription-query calls.
+     * Independent of the event store context (ADR-0006); {@code null}
+     * routes messaging to the server's {@code default} bus.
+     */
+    @Nullable
+    public String getBusName() {
+        return busName;
+    }
+
+    public void setBusName(@Nullable String busName) {
+        this.busName = busName;
     }
 
     public String getClientId() {
@@ -103,30 +112,6 @@ public class KronosDbConfiguration {
         this.certFile = certFile;
     }
 
-    public int getCommandLoadFactor() {
-        return commandLoadFactor;
-    }
-
-    public void setCommandLoadFactor(int commandLoadFactor) {
-        this.commandLoadFactor = commandLoadFactor;
-    }
-
-    public int getCommandFlowControlPermits() {
-        return commandFlowControlPermits;
-    }
-
-    public void setCommandFlowControlPermits(int commandFlowControlPermits) {
-        this.commandFlowControlPermits = commandFlowControlPermits;
-    }
-
-    public int getQueryFlowControlPermits() {
-        return queryFlowControlPermits;
-    }
-
-    public void setQueryFlowControlPermits(int queryFlowControlPermits) {
-        this.queryFlowControlPermits = queryFlowControlPermits;
-    }
-
     public long getKeepAliveTime() {
         return keepAliveTime;
     }
@@ -167,28 +152,25 @@ public class KronosDbConfiguration {
         this.heartbeatTimeout = heartbeatTimeout;
     }
 
-    public long getConnectTimeout() {
-        return connectTimeout;
-    }
-
-    public void setConnectTimeout(long connectTimeout) {
-        this.connectTimeout = connectTimeout;
-    }
-
-    public long getReconnectInterval() {
-        return reconnectInterval;
-    }
-
-    public void setReconnectInterval(long reconnectInterval) {
-        this.reconnectInterval = reconnectInterval;
-    }
-
     public int getMaxMessageSize() {
         return maxMessageSize;
     }
 
     public void setMaxMessageSize(int maxMessageSize) {
         this.maxMessageSize = maxMessageSize;
+    }
+
+    /**
+     * How long a query may wait for its answer, in milliseconds. {@code 0}
+     * (the default) sends no timeout, so the server's configured query
+     * timeout applies.
+     */
+    public long getQueryTimeoutMillis() {
+        return queryTimeoutMillis;
+    }
+
+    public void setQueryTimeoutMillis(long queryTimeoutMillis) {
+        this.queryTimeoutMillis = queryTimeoutMillis;
     }
 
     /**
@@ -209,6 +191,11 @@ public class KronosDbConfiguration {
 
         public Builder context(String context) {
             config.setContext(context);
+            return this;
+        }
+
+        public Builder busName(String busName) {
+            config.setBusName(busName);
             return this;
         }
 
@@ -237,11 +224,6 @@ public class KronosDbConfiguration {
             return this;
         }
 
-        public Builder commandLoadFactor(int loadFactor) {
-            config.setCommandLoadFactor(loadFactor);
-            return this;
-        }
-
         public Builder keepAlive(long timeMillis, long timeoutMillis) {
             config.setKeepAliveTime(timeMillis);
             config.setKeepAliveTimeout(timeoutMillis);
@@ -257,6 +239,12 @@ public class KronosDbConfiguration {
 
         public Builder maxMessageSize(int size) {
             config.setMaxMessageSize(size);
+            return this;
+        }
+
+        /** How long a query may wait for its answer; 0 leaves it to the server. */
+        public Builder queryTimeoutMillis(long millis) {
+            config.queryTimeoutMillis = millis;
             return this;
         }
 

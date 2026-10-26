@@ -6,13 +6,13 @@
 
     <groupId>io.kronosdb</groupId>
     <artifactId>axon-kronosdb-connector</artifactId>
-    <version>0.1.0</version>
+    <version>0.6.0</version>
     <packaging>jar</packaging>
 
     <name>Axon KronosDB Connector</name>
     <description>
         Connector module providing Axon Framework 5 infrastructure components
-        that connect to KronosDB as an alternative to Axon Server.
+        that connect to KronosDB 0.11+ over its native protocol, as an alternative to Axon Server.
     </description>
     <url>https://github.com/KronosDB/axon-kronosdb-connector</url>
 
@@ -35,10 +35,10 @@
         <maven.compiler.target>${java.version}</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-        <!-- Dependency versions -->
-        <axon.version>5.1.0</axon.version>
-        <grpc.version>1.68.0</grpc.version>
-        <protobuf.version>4.28.3</protobuf.version>
+        <!-- Dependency versions.
+             axon.version is what we build against; the floor is 5.3.0 (CI runs 5.3.0, 5.3.3 and 5.4.1).
+             Override it to try another: mvn verify -Daxon.version=5.3.0 -->
+        <axon.version>5.4.1</axon.version>
         <slf4j.version>2.0.16</slf4j.version>
         <jspecify.version>1.0.0</jspecify.version>
 
@@ -47,42 +47,9 @@
         <assertj.version>3.26.3</assertj.version>
         <mockito.version>5.14.2</mockito.version>
 
-        <!-- Plugin versions -->
-        <protobuf-maven-plugin.version>0.6.1</protobuf-maven-plugin.version>
-        <os-maven-plugin.version>1.7.1</os-maven-plugin.version>
     </properties>
 
     <dependencies>
-        <!-- gRPC -->
-        <dependency>
-            <groupId>io.grpc</groupId>
-            <artifactId>grpc-netty-shaded</artifactId>
-            <version>${grpc.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.grpc</groupId>
-            <artifactId>grpc-protobuf</artifactId>
-            <version>${grpc.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.grpc</groupId>
-            <artifactId>grpc-stub</artifactId>
-            <version>${grpc.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.google.protobuf</groupId>
-            <artifactId>protobuf-java</artifactId>
-            <version>${protobuf.version}</version>
-        </dependency>
-
-        <!-- Required for generated gRPC code on Java 9+ -->
-        <dependency>
-            <groupId>org.apache.tomcat</groupId>
-            <artifactId>annotations-api</artifactId>
-            <version>6.0.53</version>
-            <scope>provided</scope>
-        </dependency>
-
         <!-- Axon Framework -->
         <dependency>
             <groupId>org.axonframework</groupId>
@@ -138,6 +105,13 @@
             <version>${mockito.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Axon 5.4's default GeneralConverter is a JacksonConverter; the application smoke test needs Jackson -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.21.2</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-simple</artifactId>
@@ -147,13 +121,20 @@
     </dependencies>
 
     <build>
-        <extensions>
-            <extension>
-                <groupId>kr.motd.maven</groupId>
-                <artifactId>os-maven-plugin</artifactId>
-                <version>${os-maven-plugin.version}</version>
-            </extension>
-        </extensions>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- The license and the attribution for the vendored Axon Framework code travel with the jar -->
+            <resource>
+                <directory>${project.basedir}</directory>
+                <includes>
+                    <include>LICENSE</include>
+                    <include>NOTICE</include>
+                </includes>
+                <targetPath>META-INF</targetPath>
+            </resource>
+        </resources>
 
         <plugins>
             <plugin>
@@ -166,26 +147,6 @@
                         <arg>-proc:full</arg>
                     </compilerArgs>
                 </configuration>
-            </plugin>
-
-            <plugin>
-                <groupId>org.xolstice.maven.plugins</groupId>
-                <artifactId>protobuf-maven-plugin</artifactId>
-                <version>${protobuf-maven-plugin.version}</version>
-                <configuration>
-                    <protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
-                    <pluginId>grpc-java</pluginId>
-                    <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
-                    <protoSourceRoot>${project.basedir}/src/main/proto</protoSourceRoot>
-                </configuration>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>compile</goal>
-                            <goal>compile-custom</goal>
-                        </goals>
-                    </execution>
-                </executions>
             </plugin>
 
             <plugin>
@@ -206,7 +167,10 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.1</version>
                 <configuration>
-                    <!-- <argLine></argLine> -->
+                    <systemPropertyVariables>
+                        <fixtures.dir>${project.basedir}/protocol/fixtures</fixtures.dir>
+                        <schema.file>${project.basedir}/protocol/kronosdb.schema</schema.file>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
 

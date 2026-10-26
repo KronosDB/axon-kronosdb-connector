@@ -1,0 +1,20 @@
+# Config for the KronosDB server that AuthNativeServerTest talks to: throwaway
+# tokens, never use these anywhere real. See the README ("Running the server
+# tests") and .github/workflows/build.yml.
+#
+#   -Dkronosdb.native.auth.full=full-token
+#   -Dkronosdb.native.auth.reader=reader-token
+#   -Dkronosdb.native.auth.writer=writer-token
+
+[security]
+access-token = "full-token"      # the legacy shared secret: full access
+
+[[security.tokens]]
+name = "reader"
+token = "reader-token"
+roles = ["read"]
+
+[[security.tokens]]
+name = "writer"
+token = "writer-token"
+roles = ["write"]

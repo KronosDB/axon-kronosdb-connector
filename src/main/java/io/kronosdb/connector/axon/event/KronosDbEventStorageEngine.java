@@ -1,13 +1,13 @@
 package io.kronosdb.connector.axon.event;
 
-import io.kronosdb.connector.grpc.EventStoreChannel;
-import io.kronosdb.connector.grpc.KronosDbConnection;
-import io.kronosdb.connector.grpc.ResultStream;
-import io.kronosdb.grpc.eventstore.AppendRequest;
-import io.kronosdb.grpc.eventstore.AppendResponse;
-import io.kronosdb.grpc.eventstore.SourceRequest;
-import io.kronosdb.grpc.eventstore.SourceResponse;
-import io.kronosdb.grpc.eventstore.StreamResponse;
+import io.kronosdb.connector.transport.EventStoreChannel;
+import io.kronosdb.connector.transport.Failures;
+import io.kronosdb.connector.transport.KronosDbConnection;
+import io.kronosdb.connector.transport.ResultStream;
+import io.kronosdb.protocol.Appended;
+import io.kronosdb.protocol.Criterion;
+import io.kronosdb.protocol.Events;
+import io.kronosdb.protocol.StoredRecord;
 import org.axonframework.common.infra.ComponentDescriptor;
 import org.axonframework.eventsourcing.eventstore.AppendCondition;
 import org.axonframework.eventsourcing.eventstore.AppendEventsTransactionRejectedException;
@@ -30,6 +30,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -37,7 +38,7 @@ import java.util.concurrent.CompletableFuture;
 /**
  * An {@link EventStorageEngine} implementation backed by KronosDB.
  * <p>
- * Delegates all event store operations to a KronosDB instance via gRPC.
+ * Delegates all event store operations to a KronosDB instance over the native protocol.
  */
 public class KronosDbEventStorageEngine implements EventStorageEngine {
 
@@ -67,45 +68,39 @@ public class KronosDbEventStorageEngine implements EventStorageEngine {
 
         EventStoreChannel.AppendTransaction appendTransaction = eventChannel().startAppendTransaction();
 
-        AppendRequest.Builder requestBuilder = AppendRequest.newBuilder()
-                .setCondition(ConditionConverter.convertAppendCondition(condition));
+        List<StoredRecord> records = new ArrayList<>(events.size());
+        for (TaggedEventMessage<?> event : events) {
+            StoredRecord record = converter.convertTaggedEventMessage(event);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Appending event [{}] with timestamp [{}], tags: {}.",
+                        record.event().identifier(),
+                        record.event().timestamp(),
+                        record.event().tags().stream()
+                                .map(t -> ConditionConverter.describeTag(t))
+                                .toList());
+            }
+            records.add(record);
+        }
 
-        events.stream()
-                .map(converter::convertTaggedEventMessage)
-                .forEach(taggedEvent -> {
-                    if (logger.isDebugEnabled()) {
-                        logger.debug("Appending event [{}] with timestamp [{}], tags: {}.",
-                                taggedEvent.getEvent().getIdentifier(),
-                                taggedEvent.getEvent().getTimestamp(),
-                                taggedEvent.getTagsList().stream()
-                                        .map(t -> t.getKey().toStringUtf8() + "=" + t.getValue().toStringUtf8())
-                                        .toList());
-                    }
-                    requestBuilder.addEvents(taggedEvent);
-                });
-
-        appendTransaction.append(requestBuilder.build());
+        appendTransaction.append(ConditionConverter.convertAppendCondition(condition), records);
 
         return CompletableFuture.completedFuture(new KronosDbAppendTransaction(appendTransaction));
     }
 
     @Override
-    public MessageStream<EventMessage> source(SourcingCondition condition) {
+    public MessageStream<EventMessage> source(SourcingCondition condition, @Nullable ProcessingContext context) {
         if (logger.isDebugEnabled()) {
             logger.debug("Sourcing events with condition [{}].", condition);
         }
 
-        SourceRequest request = ConditionConverter.convertSourcingCondition(condition);
+        long from = ConditionConverter.sourcingFrom(condition);
+        List<Criterion> criteria = ConditionConverter.sourcingCriteria(condition);
         if (logger.isDebugEnabled()) {
             logger.debug("Source request: from={}, criteria={}.",
-                    request.getFromSequence(),
-                    request.getCriteriaList().stream()
-                            .map(c -> "names=" + c.getNamesList() + " tags=" + c.getTagsList().stream()
-                                    .map(t -> t.getKey().toStringUtf8() + "=" + t.getValue().toStringUtf8())
-                                    .toList())
-                            .toList());
+                    from,
+                    criteria.stream().map(ConditionConverter::describe).toList());
         }
-        ResultStream<SourceResponse> stream = eventChannel().source(request);
+        ResultStream<Events> stream = eventChannel().source(from, criteria);
         return new SourcingEventMessageStream(stream, converter);
     }
 
@@ -117,7 +112,7 @@ public class KronosDbEventStorageEngine implements EventStorageEngine {
 
         long fromSequence = ConditionConverter.extractStreamFromSequence(condition);
         var criteria = ConditionConverter.extractStreamCriteria(condition);
-        ResultStream<StreamResponse> stream = eventChannel().stream(fromSequence, criteria);
+        ResultStream<Events> stream = eventChannel().stream(fromSequence, criteria);
         return new StreamingEventMessageStream(stream, converter);
     }
 
@@ -125,22 +120,21 @@ public class KronosDbEventStorageEngine implements EventStorageEngine {
     public CompletableFuture<TrackingToken> firstToken() {
         logger.debug("Retrieving first token (tail).");
         return eventChannel().tail()
-                .thenApply(response -> new GlobalSequenceTrackingToken(response.getSequence()));
+                .thenApply(position -> new GlobalSequenceTrackingToken(position));
     }
 
     @Override
     public CompletableFuture<TrackingToken> latestToken() {
         logger.debug("Retrieving latest token (head).");
         return eventChannel().head()
-                .thenApply(response -> new GlobalSequenceTrackingToken(response.getSequence()));
+                .thenApply(position -> new GlobalSequenceTrackingToken(position));
     }
 
     @Override
     public CompletableFuture<TrackingToken> tokenAt(Instant at) {
         logger.debug("Retrieving token at timestamp [{}].", at);
         return eventChannel().getSequenceAt(at.toEpochMilli())
-                .thenApply(response -> new GlobalSequenceTrackingToken(
-                        response.getSequence() == -1 ? 0 : response.getSequence()));
+                .thenApply(position -> new GlobalSequenceTrackingToken(position == -1 ? 0 : position));
     }
 
     private EventStoreChannel eventChannel() {
@@ -155,23 +149,24 @@ public class KronosDbEventStorageEngine implements EventStorageEngine {
 
     private record KronosDbAppendTransaction(
             EventStoreChannel.AppendTransaction appendTransaction
-    ) implements AppendTransaction<AppendResponse> {
+    ) implements AppendTransaction<Appended> {
 
         @Override
-        public CompletableFuture<AppendResponse> commit() {
+        public CompletableFuture<Appended> commit() {
             logger.debug("Committing append transaction...");
             return appendTransaction.commit()
                     .exceptionallyCompose(throwable -> {
-                        logger.warn("Append transaction commit failed.", throwable);
+                        Throwable cause = Failures.unwrap(throwable);
+                        logger.warn("Append transaction commit failed.", cause);
                         return CompletableFuture.failedFuture(
-                                new AppendEventsTransactionRejectedException(throwable.getMessage())
+                                new AppendEventsTransactionRejectedException(cause.getMessage())
                         );
                     });
         }
 
         @Override
-        public CompletableFuture<ConsistencyMarker> afterCommit(AppendResponse appendResponse) {
-            long marker = appendResponse.getConsistencyMarker();
+        public CompletableFuture<ConsistencyMarker> afterCommit(Appended appendResponse) {
+            long marker = appendResponse.marker();
             logger.debug("Append transaction succeeded with marker [{}].", marker);
             return CompletableFuture.completedFuture(new GlobalIndexConsistencyMarker(marker));
         }
