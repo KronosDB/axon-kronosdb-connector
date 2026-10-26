@@ -1,0 +1,131 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      kronosdb-image:
+        description: >-
+          KronosDB server image with the native protocol (0.11 or later), e.g.
+          ghcr.io/kronosdb/kronosdb:0.11.0. When set, the server-tests job runs
+          the tests that need a live server against it.
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  # Everything that needs no server: unit tests, the scripted stand-in server,
+  # TLS with generated certificates, and the protocol conformance suite.
+  # The matrix is the supported Axon Framework range: the floor, the last 5.3.x
+  # and the version the connector is built against.
+  build:
+    name: Build (Axon ${{ matrix.axon }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        axon: ["5.3.0", "5.3.3", "5.4.1"]
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build
+        run: mvn -B verify -Daxon.version=${{ matrix.axon }}
+
+  # The tests that need KronosDB. Opt-in: there is no released server image with
+  # the native protocol before KronosDB 0.11.0, so this runs only from a manual
+  # dispatch that names an image. Once 0.11.0 is out, change the `if` to run on
+  # every push and set the image below (see the README).
+  server-tests:
+    name: Server tests (Axon ${{ matrix.axon }})
+    if: github.event_name == 'workflow_dispatch' && inputs.kronosdb-image != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        axon: ["5.3.0", "5.4.1"]
+    env:
+      KRONOSDB_IMAGE: ${{ inputs.kronosdb-image }}
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      # The main server runs with the short timeouts the timeout and heartbeat
+      # tests rely on (kronosdb.native.short-timeouts); everything else shares it.
+      - name: Start KronosDB
+        run: |
+          docker run -d --name kronosdb \
+            -p 50051:50051 -p 9240:9240 \
+            -e KRONOSDB_DEV=1 \
+            -e KRONOSDB_COMMAND_TIMEOUT=3 \
+            -e KRONOSDB_QUERY_TIMEOUT=3 \
+            -e KRONOSDB_HEARTBEAT_INTERVAL=1 \
+            -e KRONOSDB_HEARTBEAT_TIMEOUT=4 \
+            "$KRONOSDB_IMAGE"
+
+      # A second server with authentication on, for AuthNativeServerTest.
+      - name: Start KronosDB with authentication
+        run: |
+          chmod 644 scripts/test-auth.toml
+          docker run -d --name kronosdb-auth \
+            -p 50052:50051 -p 9241:9240 \
+            -e KRONOSDB_DEV=1 \
+            -v "$PWD/scripts/test-auth.toml:/etc/kronosdb/auth.toml:ro" \
+            "$KRONOSDB_IMAGE" --config /etc/kronosdb/auth.toml
+
+      - name: Wait for both servers
+        run: |
+          for port in 9240 9241; do
+            for i in $(seq 1 60); do
+              curl -fs "http://localhost:$port/health" >/dev/null && break
+              if [ "$i" = 60 ]; then
+                echo "KronosDB on admin port $port did not become healthy" >&2
+                docker logs kronosdb >&2 || true
+                docker logs kronosdb-auth >&2 || true
+                exit 1
+              fi
+              sleep 1
+            done
+          done
+
+      - name: Test against the servers
+        run: >-
+          mvn -B verify -Daxon.version=${{ matrix.axon }}
+          -Dkronosdb.native.addr=localhost:50051
+          -Dkronosdb.native.admin=localhost:9240
+          -Dkronosdb.native.short-timeouts=true
+          -Dkronosdb.native.auth.addr=localhost:50052
+          -Dkronosdb.native.auth.full=full-token
+          -Dkronosdb.native.auth.reader=reader-token
+          -Dkronosdb.native.auth.writer=writer-token
+
+      - name: Server logs
+        if: failure()
+        run: |
+          docker logs kronosdb || true
+          docker logs kronosdb-auth || true

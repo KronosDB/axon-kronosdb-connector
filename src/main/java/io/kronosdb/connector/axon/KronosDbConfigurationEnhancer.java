@@ -14,15 +14,15 @@ import org.axonframework.common.configuration.Configuration;
 import org.axonframework.common.configuration.ConfigurationEnhancer;
 import org.axonframework.common.configuration.SearchScope;
 import org.axonframework.common.lifecycle.Phase;
-import org.axonframework.conversion.Converter;
+import org.axonframework.conversion.GeneralConverter;
 import org.axonframework.eventsourcing.eventstore.EventStorageEngine;
 import org.axonframework.eventsourcing.snapshot.store.SnapshotStore;
-import org.axonframework.messaging.commandhandling.distributed.CommandBusConnector;
-import org.axonframework.messaging.commandhandling.distributed.PayloadConvertingCommandBusConnector;
+import io.kronosdb.connector.axon.distributed.command.CommandBusConnector;
+import io.kronosdb.connector.axon.distributed.command.PayloadConvertingCommandBusConnector;
 import org.axonframework.messaging.core.conversion.MessageConverter;
 import org.axonframework.messaging.eventhandling.conversion.EventConverter;
-import org.axonframework.messaging.queryhandling.distributed.PayloadConvertingQueryBusConnector;
-import org.axonframework.messaging.queryhandling.distributed.QueryBusConnector;
+import io.kronosdb.connector.axon.distributed.query.PayloadConvertingQueryBusConnector;
+import io.kronosdb.connector.axon.distributed.query.QueryBusConnector;
 
 /**
  * A {@link ConfigurationEnhancer} that is auto-loadable by the {@link ApplicationConfigurer},
@@ -131,7 +131,7 @@ public class KronosDbConfigurationEnhancer implements ConfigurationEnhancer {
         return ComponentDefinition.ofType(SnapshotStore.class)
                 .withBuilder(c -> new KronosDbSnapshotStore(
                         c.getComponent(KronosDbConnectionManager.class).getConnection(),
-                        c.getComponent(Converter.class)
+                        c.getComponent(GeneralConverter.class)
                 ));
     }
 

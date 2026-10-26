@@ -1,0 +1,62 @@
+Axon KronosDB Connector
+https://github.com/KronosDB/axon-kronosdb-connector
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes software developed by others, listed below.
+
+--------------------------------------------------------------------------------
+Axon Framework
+https://github.com/AxonFramework/AxonFramework
+Copyright (c) 2010-2026. Axon Framework
+Licensed under the Apache License, Version 2.0
+
+Twelve source files are copied from Axon Framework, from the main branch at
+5.2.0-SNAPSHOT, commit 22a9fd3f6a9c943f602c6ede55b40690b26c6210 (2026-04-07).
+They are the distributed command bus and distributed query bus that Axon
+Framework shipped in axon-messaging before version 5.1, together with the
+CommandBusConnector and QueryBusConnector contracts they are built on. Later
+Axon Framework releases moved them out of the open-source artifacts, and this
+connector needs them to plug KronosDB in as the command and query transport.
+
+They live in src/main/java/io/kronosdb/connector/axon/distributed/ and keep
+their original license headers. Each file starts with a comment naming the file
+it came from and its original package. The only modification is the package
+declaration, which is now:
+
+  io.kronosdb.connector.axon.distributed.command
+  io.kronosdb.connector.axon.distributed.query
+
+Original packages and files:
+
+  org.axonframework.messaging.commandhandling.distributed
+    CommandBusConnector
+    DelegatingCommandBusConnector
+    DistributedCommandBus
+    DistributedCommandBusConfiguration
+    DistributedCommandBusConfigurationEnhancer
+    PayloadConvertingCommandBusConnector
+
+  org.axonframework.messaging.queryhandling.distributed
+    QueryBusConnector
+    DelegatingQueryBusConnector
+    DistributedQueryBus
+    DistributedQueryBusConfiguration
+    DistributedQueryBusConfigurationEnhancer
+    PayloadConvertingQueryBusConnector
+
+Axon Framework does not ship a NOTICE file (none exists in its source tree at
+that commit or in the released axon-messaging jars), so there is no Axon
+Framework NOTICE content to reproduce here.
+
+--------------------------------------------------------------------------------
+KronosDB native protocol codec
+https://github.com/KronosDB/kronosdb
+Licensed under the Apache License, Version 2.0
+
+src/main/java/io/kronosdb/protocol/, protocol/kronosdb.schema and
+protocol/fixtures/ are copied, unmodified, from the protocol/ directory of the
+KronosDB repository by scripts/vendor-protocol.sh. The Java sources there are
+generated from the schema and carry no license header of their own; the
+KronosDB repository is licensed under the Apache License, Version 2.0, the same
+license as this repository.

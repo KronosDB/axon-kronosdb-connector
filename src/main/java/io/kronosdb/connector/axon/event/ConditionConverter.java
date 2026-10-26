@@ -1,26 +1,26 @@
 package io.kronosdb.connector.axon.event;
 
-import com.google.protobuf.ByteString;
-import io.kronosdb.grpc.eventstore.ConsistencyCondition;
-import io.kronosdb.grpc.eventstore.Criterion;
-import io.kronosdb.grpc.eventstore.SourceRequest;
-import io.kronosdb.grpc.eventstore.Tag;
+import io.kronosdb.protocol.Condition;
+import io.kronosdb.protocol.Criterion;
+import io.kronosdb.protocol.Tag;
 import org.axonframework.eventsourcing.eventstore.AppendCondition;
 import org.axonframework.eventsourcing.eventstore.GlobalIndexConsistencyMarker;
 import org.axonframework.eventsourcing.eventstore.GlobalIndexPosition;
 import org.axonframework.eventsourcing.eventstore.SourcingCondition;
 import org.axonframework.messaging.core.QualifiedName;
-import org.axonframework.messaging.eventstreaming.EventCriteria;
 import org.axonframework.messaging.eventstreaming.EventCriterion;
 import org.axonframework.messaging.eventstreaming.StreamingCondition;
+import org.jspecify.annotations.Nullable;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
 /**
  * Converts Axon Framework event conditions (append, sourcing, streaming) into
- * KronosDB gRPC request messages.
+ * native protocol values.
  */
 public final class ConditionConverter {
 
@@ -28,33 +28,36 @@ public final class ConditionConverter {
     }
 
     /**
-     * Converts an {@link AppendCondition} to a KronosDB {@link ConsistencyCondition}.
+     * Converts an {@link AppendCondition} to a protocol {@link Condition}, or {@code null} when it has
+     * no criteria: an append that conflicts with nothing needs no check.
      */
-    public static ConsistencyCondition convertAppendCondition(AppendCondition condition) {
+    public static @Nullable Condition convertAppendCondition(AppendCondition condition) {
+        List<Criterion> criteria = convertEventCriteria(condition.criteria().flatten());
+        if (criteria.isEmpty()) {
+            return null;
+        }
         long marker = GlobalIndexConsistencyMarker.position(condition.consistencyMarker());
         if (marker < 0) {
             marker = 0;
         }
-        return ConsistencyCondition.newBuilder()
-                .setConsistencyMarker(marker)
-                .addAllCriteria(convertEventCriteria(condition.criteria().flatten()))
-                .build();
+        return new Condition(marker, criteria);
     }
 
     /**
-     * Converts a {@link SourcingCondition} to a KronosDB {@link SourceRequest}.
+     * The position a {@link SourcingCondition} reads from.
      */
-    public static SourceRequest convertSourcingCondition(SourcingCondition condition) {
+    public static long sourcingFrom(SourcingCondition condition) {
         long fromIndex = GlobalIndexPosition.toIndex(condition.start());
         // GlobalIndexPosition.toIndex returns Long.MIN_VALUE for Position.START.
         // KronosDB uses 0 to mean "start from the beginning".
-        if (fromIndex < 0) {
-            fromIndex = 0;
-        }
-        return SourceRequest.newBuilder()
-                .setFromSequence(fromIndex)
-                .addAllCriteria(convertEventCriteria(condition.criteria().flatten()))
-                .build();
+        return fromIndex < 0 ? 0 : fromIndex;
+    }
+
+    /**
+     * The criteria a {@link SourcingCondition} filters by.
+     */
+    public static List<Criterion> sourcingCriteria(SourcingCondition condition) {
+        return convertEventCriteria(condition.criteria().flatten());
     }
 
     /**
@@ -65,39 +68,42 @@ public final class ConditionConverter {
     }
 
     /**
-     * Extracts the criteria from a {@link StreamingCondition} as KronosDB {@link Criterion} list.
+     * Extracts the criteria from a {@link StreamingCondition}.
      */
     public static List<Criterion> extractStreamCriteria(StreamingCondition condition) {
         return convertEventCriteria(condition.criteria().flatten());
     }
 
     private static List<Criterion> convertEventCriteria(Set<EventCriterion> eventCriteria) {
-        return eventCriteria.stream()
-                .map(ConditionConverter::convertEventCriterion)
-                .toList();
+        List<Criterion> criteria = new ArrayList<>(eventCriteria.size());
+        for (EventCriterion criterion : eventCriteria) {
+            criteria.add(convertEventCriterion(criterion));
+        }
+        return criteria;
     }
 
     private static Criterion convertEventCriterion(EventCriterion eventCriterion) {
-        return Criterion.newBuilder()
-                .addAllNames(convertTypes(eventCriterion.types()))
-                .addAllTags(convertTags(eventCriterion.tags()))
-                .build();
+        List<String> names = new ArrayList<>();
+        for (QualifiedName type : eventCriterion.types()) {
+            names.add(type.name());
+        }
+        List<Tag> tags = TaggedEventConverter.convertTagSet(eventCriterion.tags());
+        return new Criterion(names, tags);
     }
 
-    private static List<Tag> convertTags(Set<org.axonframework.messaging.eventstreaming.Tag> tags) {
-        return tags.stream()
-                .map(ConditionConverter::convertTag)
-                .toList();
+    static String describe(Criterion criterion) {
+        List<String> tags = new ArrayList<>();
+        for (Tag tag : criterion.tags()) {
+            tags.add(utf8(tag.key()) + "=" + utf8(tag.value()));
+        }
+        return "names=" + criterion.names() + " tags=" + tags;
     }
 
-    private static Tag convertTag(org.axonframework.messaging.eventstreaming.Tag tag) {
-        return Tag.newBuilder()
-                .setKey(ByteString.copyFrom(tag.key(), StandardCharsets.UTF_8))
-                .setValue(ByteString.copyFrom(tag.value(), StandardCharsets.UTF_8))
-                .build();
+    static String describeTag(Tag tag) {
+        return utf8(tag.key()) + "=" + utf8(tag.value());
     }
 
-    private static List<String> convertTypes(Set<QualifiedName> types) {
-        return types.stream().map(QualifiedName::name).toList();
+    private static String utf8(ByteBuffer buffer) {
+        return StandardCharsets.UTF_8.decode(buffer.duplicate()).toString();
     }
 }

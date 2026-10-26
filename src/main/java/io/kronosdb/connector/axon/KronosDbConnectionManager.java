@@ -1,13 +1,14 @@
 package io.kronosdb.connector.axon;
 
-import io.kronosdb.connector.grpc.KronosDbConnection;
-import io.kronosdb.connector.grpc.KronosDbConnectionFactory;
-import io.kronosdb.grpc.platform.ClientIdentification;
+import io.kronosdb.connector.transport.KronosDbConnection;
+import io.kronosdb.connector.transport.KronosDbConnectionFactory;
+import io.kronosdb.protocol.ClientIdentity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.net.ssl.SSLException;
 import java.io.File;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -46,6 +47,10 @@ public class KronosDbConnectionManager {
 
         if (configuration.getToken() != null) {
             factoryBuilder.token(configuration.getToken());
+        }
+
+        if (configuration.getBusName() != null && !configuration.getBusName().isEmpty()) {
+            factoryBuilder.busName(configuration.getBusName());
         }
 
         if (configuration.isSslEnabled()) {
@@ -116,19 +121,19 @@ public class KronosDbConnectionManager {
     }
 
     private void registerWithPlatform(KronosDbConnection conn) {
-        ClientIdentification identification = ClientIdentification.newBuilder()
-                .setClientId(configuration.getClientId())
-                .setComponentName(configuration.getComponentName())
-                .setVersion("0.1.0")
-                .build();
+        ClientIdentity identification = new ClientIdentity(
+                configuration.getClientId(),
+                configuration.getComponentName(),
+                "0.1.0",
+                List.of());
 
-        // Unary RPC to register client
+        // Unary request to register client
         conn.platformChannel().connect(identification)
                 .whenComplete((info, error) -> {
                     if (error != null) {
                         logger.error("Failed to register with KronosDB platform service.", error);
                     } else {
-                        logger.info("Registered with KronosDB node [{}].", info.getNodeName());
+                        logger.info("Registered with KronosDB node [{}].", info.nodeName());
                     }
                 });
 
@@ -137,10 +142,7 @@ public class KronosDbConnectionManager {
                 logger.info("KronosDB requested reconnect for context [{}].", conn.context()));
 
         if (configuration.isHeartbeatEnabled()) {
-            conn.platformChannel().enableHeartbeat(
-                    configuration.getHeartbeatInterval(),
-                    configuration.getHeartbeatTimeout()
-            );
+            conn.platformChannel().enableHeartbeat(configuration.getHeartbeatInterval());
         }
     }
 

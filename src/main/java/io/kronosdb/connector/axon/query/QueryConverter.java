@@ -1,15 +1,16 @@
 package io.kronosdb.connector.axon.query;
 
-import com.google.protobuf.ByteString;
+import io.kronosdb.connector.axon.KronosDbException;
 import io.kronosdb.connector.axon.MetadataConverter;
-import io.kronosdb.grpc.MetadataValue;
-import io.kronosdb.grpc.ProcessingInstruction;
-import io.kronosdb.grpc.ProcessingKey;
-import io.kronosdb.grpc.SerializedObject;
-import io.kronosdb.grpc.query.QueryRequest;
-import io.kronosdb.grpc.query.QueryResponse;
-import io.kronosdb.grpc.query.QueryUpdate;
-import io.kronosdb.grpc.query.SubscriptionQuery;
+import io.kronosdb.protocol.ErrorDetail;
+import io.kronosdb.protocol.MetadataValue;
+import io.kronosdb.protocol.Payload;
+import io.kronosdb.protocol.ProcessingInstruction;
+import io.kronosdb.protocol.ProcessingKey;
+import io.kronosdb.protocol.Query;
+import io.kronosdb.protocol.QueryResult;
+import io.kronosdb.protocol.QueryUpdate;
+import io.kronosdb.protocol.SubscriptionQuery;
 import org.axonframework.conversion.Converter;
 import org.axonframework.messaging.core.GenericMessage;
 import org.axonframework.messaging.core.MessageType;
@@ -21,42 +22,57 @@ import org.axonframework.messaging.queryhandling.QueryResponseMessage;
 import org.axonframework.messaging.queryhandling.SubscriptionQueryUpdateMessage;
 import org.jspecify.annotations.Nullable;
 
-import java.util.Map;
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
+import java.util.UUID;
 
 /**
  * Utility class for converting between Axon Framework query messages
- * and KronosDB gRPC query messages.
+ * and KronosDB native protocol queries.
  */
 public final class QueryConverter {
+
+    private static final byte[] NO_BYTES = new byte[0];
 
     private QueryConverter() {
     }
 
     /**
-     * Converts a KronosDB gRPC {@link QueryRequest} to an Axon Framework {@link QueryMessage}.
+     * Converts a protocol {@link Query} to an Axon Framework {@link QueryMessage}.
      */
-    static QueryMessage convertQueryRequest(QueryRequest queryRequest, @Nullable Converter converter) {
-        var payload = queryRequest.getPayload();
-        Integer priority = priority(queryRequest.getProcessingInstructionsList());
+    static QueryMessage convertQueryRequest(Query queryRequest, @Nullable Converter converter) {
+        Payload payload = queryRequest.payload();
+        Integer priority = priority(queryRequest.instructions());
 
-        var type = new MessageType(payload.getType(), payload.getRevision());
+        var type = new MessageType(payload.typeName(), payload.revision());
         return new GenericQueryMessage(
                 new GenericMessage(
-                        queryRequest.getMessageIdentifier(),
+                        queryRequest.messageId(),
                         type,
-                        payload.getData().toByteArray(),
-                        MetadataConverter.fromGrpcMetadata(queryRequest.getMetadataMap())
+                        toArray(payload.data()),
+                        MetadataConverter.fromWireMetadata(queryRequest.metadata())
                 ),
                 priority
         ).withConverter(converter);
     }
 
     /**
-     * Converts an Axon Framework {@link QueryMessage} to a KronosDB gRPC {@link QueryRequest}.
+     * Converts an Axon Framework {@link QueryMessage} to a protocol {@link Query}.
+     * The server's query timeout applies.
      */
-    public static QueryRequest convertQueryMessage(QueryMessage query, String clientId, String componentName) {
+    public static Query convertQueryMessage(QueryMessage query, String clientId, String componentName) {
+        return convertQueryMessage(query, clientId, componentName, 0);
+    }
+
+    /**
+     * Converts an Axon Framework {@link QueryMessage} to a protocol {@link Query}
+     * that may wait {@code timeoutMillis} for its answer; {@code 0} leaves the
+     * timeout to the server.
+     */
+    public static Query convertQueryMessage(QueryMessage query, String clientId, String componentName,
+                                            long timeoutMillis) {
         Object payload = query.payload();
         if (!(payload instanceof byte[] payloadAsBytes)) {
             throw new IllegalArgumentException(
@@ -64,73 +80,104 @@ public final class QueryConverter {
                             + query.payloadType().getName());
         }
 
-        QueryRequest.Builder builder = QueryRequest.newBuilder();
-        addPriority(builder, query);
+        List<ProcessingInstruction> instructions = new ArrayList<>(3);
+        query.priority().ifPresent(priority -> instructions.add(
+                new ProcessingInstruction(ProcessingKey.PRIORITY, new MetadataValue.OfNumber(priority))));
+        instructions.add(new ProcessingInstruction(ProcessingKey.NR_OF_RESULTS, new MetadataValue.OfNumber(1)));
+        // Axon's own connector always sent one hour, a placeholder; without an
+        // explicit timeout the server's [timeouts] query applies.
+        if (timeoutMillis > 0) {
+            instructions.add(new ProcessingInstruction(ProcessingKey.TIMEOUT,
+                    new MetadataValue.OfNumber(timeoutMillis)));
+        }
 
-        return builder.setTimestamp(System.currentTimeMillis())
-                .setClientId(clientId)
-                .setComponentName(componentName)
-                .setMessageIdentifier(query.identifier())
-                .setQuery(query.type().name())
-                .putAllMetadata(MetadataConverter.toGrpcMetadata(query.metadata()))
-                .setPayload(SerializedObject.newBuilder()
-                        .setData(ByteString.copyFrom(payloadAsBytes))
-                        .setType(query.type().name())
-                        .setRevision(query.type().version())
-                        .build())
-                .addProcessingInstructions(nrOfResults(1))
-                .addProcessingInstructions(timeout(TimeUnit.HOURS.toMillis(1)))
-                .build();
+        return new Query(
+                query.identifier(),
+                query.type().name(),
+                System.currentTimeMillis(),
+                new Payload(query.type().name(), query.type().version(), ByteBuffer.wrap(payloadAsBytes)),
+                MetadataConverter.toWireMetadata(query.metadata()),
+                instructions,
+                clientId,
+                componentName);
     }
 
     /**
-     * Converts a KronosDB gRPC {@link QueryResponse} to an Axon Framework {@link QueryResponseMessage}.
+     * The failure a handler reported in {@code queryResponse}, or {@code null} if it is an answer.
      */
-    public static QueryResponseMessage convertQueryResponse(QueryResponse queryResponse,
-                                                             @Nullable Converter converter) {
-        if (queryResponse.hasErrorMessage() && !queryResponse.getErrorCode().isEmpty()) {
+    public static @Nullable KronosDbException failureOf(QueryResult queryResponse) {
+        if (queryResponse.errorCode().isEmpty() && queryResponse.error() == null) {
+            return null;
+        }
+        String message = queryResponse.error() != null
+                ? queryResponse.error().message()
+                : queryResponse.errorCode();
+        return new KronosDbException(queryResponse.errorCode(), message);
+    }
+
+    /**
+     * The result a handler sends when its query failed with {@code error}.
+     */
+    public static QueryResult convertQueryFailure(String requestId, Throwable error) {
+        String message = error.getMessage() != null ? error.getMessage() : error.toString();
+        return new QueryResult(
+                UUID.randomUUID().toString(),
+                requestId,
+                "QUERY_EXECUTION_ERROR",
+                new ErrorDetail(message, "", List.of(), "QUERY_EXECUTION_ERROR"),
+                null,
+                List.of(),
+                List.of());
+    }
+
+    /**
+     * Converts a protocol {@link QueryResult} to an Axon Framework {@link QueryResponseMessage}.
+     * The result must be an answer, not a failure: see {@link #failureOf(QueryResult)}.
+     */
+    public static QueryResponseMessage convertQueryResponse(QueryResult queryResponse,
+                                                            @Nullable Converter converter) {
+        if (failureOf(queryResponse) != null) {
             throw new IllegalArgumentException("Query response contained an error.");
         }
-        SerializedObject responsePayload = queryResponse.getPayload();
+        Payload responsePayload = queryResponse.payload();
         var message = new GenericMessage(
-                queryResponse.getMessageIdentifier(),
-                new MessageType(responsePayload.getType(), responsePayload.getRevision()),
-                responsePayload.getData().toByteArray(),
-                MetadataConverter.fromGrpcMetadata(queryResponse.getMetadataMap())
+                queryResponse.messageId(),
+                new MessageType(responsePayload.typeName(), responsePayload.revision()),
+                toArray(responsePayload.data()),
+                MetadataConverter.fromWireMetadata(queryResponse.metadata())
         );
         return new GenericQueryResponseMessage(message).withConverter(converter);
     }
 
     /**
-     * Converts an Axon Framework {@link QueryResponseMessage} to a KronosDB gRPC {@link QueryResponse}.
+     * Converts an Axon Framework {@link QueryResponseMessage} to a protocol {@link QueryResult}.
      */
-    public static QueryResponse convertQueryResponseMessage(String requestId,
-                                                             QueryResponseMessage queryResponseMessage) {
+    public static QueryResult convertQueryResponseMessage(String requestId,
+                                                          QueryResponseMessage queryResponseMessage) {
         byte[] payload = Objects.requireNonNullElseGet(
-                queryResponseMessage.payloadAs(byte[].class), () -> new byte[0]);
-        return QueryResponse.newBuilder()
-                .setMessageIdentifier(queryResponseMessage.identifier())
-                .setRequestIdentifier(requestId)
-                .setPayload(SerializedObject.newBuilder()
-                        .setType(queryResponseMessage.type().name())
-                        .setRevision(queryResponseMessage.type().version())
-                        .setData(ByteString.copyFrom(payload))
-                        .build())
-                .putAllMetadata(MetadataConverter.toGrpcMetadata(queryResponseMessage.metadata()))
-                .build();
+                queryResponseMessage.payloadAs(byte[].class), () -> NO_BYTES);
+        return new QueryResult(
+                queryResponseMessage.identifier(),
+                requestId,
+                "",
+                null,
+                new Payload(queryResponseMessage.type().name(), queryResponseMessage.type().version(),
+                        ByteBuffer.wrap(payload)),
+                MetadataConverter.toWireMetadata(queryResponseMessage.metadata()),
+                List.of());
     }
 
     /**
      * Converts a {@link SubscriptionQuery} to a {@link QueryMessage}.
      */
     public static QueryMessage convertSubscriptionQueryMessage(SubscriptionQuery query,
-                                                                @Nullable Converter converter) {
-        SerializedObject responsePayload = query.getQueryRequest().getPayload();
+                                                               @Nullable Converter converter) {
+        Payload responsePayload = query.query().payload();
         var message = new GenericMessage(
-                query.getSubscriptionIdentifier(),
-                new MessageType(responsePayload.getType(), responsePayload.getRevision()),
-                responsePayload.getData().toByteArray(),
-                MetadataConverter.fromGrpcMetadata(query.getQueryRequest().getMetadataMap())
+                query.subscriptionId(),
+                new MessageType(responsePayload.typeName(), responsePayload.revision()),
+                toArray(responsePayload.data()),
+                MetadataConverter.fromWireMetadata(query.query().metadata())
         );
         return new GenericQueryMessage(message).withConverter(converter);
     }
@@ -138,61 +185,47 @@ public final class QueryConverter {
     /**
      * Converts a {@link SubscriptionQueryUpdateMessage} to a {@link QueryUpdate}.
      */
-    public static QueryUpdate convertQueryUpdate(SubscriptionQueryUpdateMessage update) {
-        byte[] payload = Objects.requireNonNullElseGet(update.payloadAs(byte[].class), () -> new byte[0]);
-        return QueryUpdate.newBuilder()
-                .setMessageIdentifier(update.identifier())
-                .setPayload(SerializedObject.newBuilder()
-                        .setType(update.type().name())
-                        .setRevision(update.type().version())
-                        .setData(ByteString.copyFrom(payload))
-                        .build())
-                .putAllMetadata(MetadataConverter.toGrpcMetadata(update.metadata()))
-                .build();
+    public static QueryUpdate convertQueryUpdate(SubscriptionQueryUpdateMessage update,
+                                                 String clientId, String componentName) {
+        byte[] payload = Objects.requireNonNullElseGet(update.payloadAs(byte[].class), () -> NO_BYTES);
+        return new QueryUpdate(
+                update.identifier(),
+                new Payload(update.type().name(), update.type().version(), ByteBuffer.wrap(payload)),
+                MetadataConverter.toWireMetadata(update.metadata()),
+                clientId,
+                componentName,
+                "",
+                null);
     }
 
     /**
      * Converts a {@link QueryUpdate} to a {@link SubscriptionQueryUpdateMessage}.
      */
     public static SubscriptionQueryUpdateMessage convertQueryUpdate(QueryUpdate queryUpdate,
-                                                                     @Nullable Converter converter) {
-        SerializedObject payload = queryUpdate.getPayload();
+                                                                    @Nullable Converter converter) {
+        Payload payload = queryUpdate.payload();
         var message = new GenericMessage(
-                queryUpdate.getMessageIdentifier(),
-                new MessageType(payload.getType(), payload.getRevision()),
-                payload.getData().toByteArray(),
-                MetadataConverter.fromGrpcMetadata(queryUpdate.getMetadataMap())
+                queryUpdate.messageId(),
+                new MessageType(payload.typeName(), payload.revision()),
+                toArray(payload.data()),
+                MetadataConverter.fromWireMetadata(queryUpdate.metadata())
         );
         return new GenericSubscriptionQueryUpdateMessage(message).withConverter(converter);
     }
 
-    private static void addPriority(QueryRequest.Builder builder, QueryMessage query) {
-        query.priority().ifPresent(priority ->
-                builder.addProcessingInstructions(ProcessingInstruction.newBuilder()
-                        .setKey(ProcessingKey.PRIORITY)
-                        .setValue(MetadataValue.newBuilder().setNumberValue(priority))
-                        .build()));
+    private static byte[] toArray(ByteBuffer buffer) {
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(buffer.position(), bytes);
+        return bytes;
     }
 
-    private static ProcessingInstruction nrOfResults(int nrOfResults) {
-        return ProcessingInstruction.newBuilder()
-                .setKey(ProcessingKey.NR_OF_RESULTS)
-                .setValue(MetadataValue.newBuilder().setNumberValue(nrOfResults))
-                .build();
-    }
-
-    private static ProcessingInstruction timeout(long timeoutMillis) {
-        return ProcessingInstruction.newBuilder()
-                .setKey(ProcessingKey.TIMEOUT)
-                .setValue(MetadataValue.newBuilder().setNumberValue(timeoutMillis))
-                .build();
-    }
-
-    private static int priority(java.util.List<ProcessingInstruction> instructions) {
-        return instructions.stream()
-                .filter(pi -> pi.getKey() == ProcessingKey.PRIORITY)
-                .findFirst()
-                .map(pi -> (int) pi.getValue().getNumberValue())
-                .orElse(0);
+    private static int priority(List<ProcessingInstruction> instructions) {
+        for (ProcessingInstruction instruction : instructions) {
+            if (instruction.key().equals(ProcessingKey.PRIORITY)
+                    && instruction.value() instanceof MetadataValue.OfNumber number) {
+                return (int) number.value();
+            }
+        }
+        return 0;
     }
 }

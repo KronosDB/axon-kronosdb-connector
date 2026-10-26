@@ -1,7 +1,7 @@
 package io.kronosdb.connector.axon.event;
 
-import io.kronosdb.grpc.platform.EventProcessorInfo;
-import io.kronosdb.grpc.platform.EventProcessorInfo.SegmentStatus;
+import io.kronosdb.protocol.ProcessorStatus;
+import io.kronosdb.protocol.SegmentStatus;
 import org.axonframework.messaging.eventhandling.processing.EventProcessor;
 import org.axonframework.messaging.eventhandling.processing.streaming.StreamingEventProcessor;
 import org.axonframework.messaging.eventhandling.processing.streaming.segmenting.EventTrackerStatus;
@@ -11,11 +11,11 @@ import org.axonframework.messaging.eventhandling.processing.subscribing.Subscrib
 import java.util.List;
 
 /**
- * Utility class constructing {@link EventProcessorInfo} instances for all known
+ * Utility class constructing {@link ProcessorStatus} instances for all known
  * {@link EventProcessor} types.
  * <p>
- * Mirrors the Axon Server connector's {@code EventProcessorInfoUtils} so that
- * KronosDB receives the same processor status shape.
+ * Normalizes each processor type into the status shape that
+ * KronosDB's platform service expects.
  */
 final class EventProcessorInfoUtils {
 
@@ -23,53 +23,42 @@ final class EventProcessorInfoUtils {
     private static final String SUBSCRIBING = "Subscribing";
     private static final String UNKNOWN = "Unknown";
 
-    static EventProcessorInfo describeStreaming(StreamingEventProcessor processor) {
+    static ProcessorStatus describeStreaming(StreamingEventProcessor processor) {
         List<SegmentStatus> segmentStatuses = processor.processingStatus()
                 .values()
                 .stream()
                 .map(EventProcessorInfoUtils::buildSegmentStatus)
                 .toList();
 
-        return EventProcessorInfo.newBuilder()
-                .setProcessorName(processor.name())
-                .setTokenStoreIdentifier(processor.getTokenStoreIdentifier())
-                .setMode(POOLED_STREAMING)
-                .setActiveThreads(processor.processingStatus().size())
-                .setAvailableThreads(
-                        processor.maxCapacity() - processor.processingStatus().size()
-                )
-                .setRunning(processor.isRunning())
-                .setError(processor.isError())
-                .addAllSegmentStatus(segmentStatuses)
-                .setIsStreamingProcessor(true)
-                .build();
+        int active = processor.processingStatus().size();
+        return new ProcessorStatus(
+                processor.name(),
+                POOLED_STREAMING,
+                active,
+                Math.max(0, processor.maxCapacity() - active),
+                processor.isRunning(),
+                processor.isError(),
+                true,
+                processor.getTokenStoreIdentifier(),
+                segmentStatuses);
     }
 
-    static EventProcessorInfo describeSubscribing(SubscribingEventProcessor processor) {
-        return EventProcessorInfo.newBuilder()
-                .setProcessorName(processor.name())
-                .setMode(SUBSCRIBING)
-                .setIsStreamingProcessor(false)
-                .build();
+    static ProcessorStatus describeSubscribing(SubscribingEventProcessor processor) {
+        return new ProcessorStatus(processor.name(), SUBSCRIBING, 0, 0, false, false, false, "", List.of());
     }
 
-    static EventProcessorInfo describeUnknown(EventProcessor processor) {
-        return EventProcessorInfo.newBuilder()
-                .setProcessorName(processor.name())
-                .setMode(UNKNOWN)
-                .setIsStreamingProcessor(false)
-                .build();
+    static ProcessorStatus describeUnknown(EventProcessor processor) {
+        return new ProcessorStatus(processor.name(), UNKNOWN, 0, 0, false, false, false, "", List.of());
     }
 
     private static SegmentStatus buildSegmentStatus(EventTrackerStatus status) {
-        return SegmentStatus.newBuilder()
-                .setSegmentId(status.getSegment().getSegmentId())
-                .setCaughtUp(status.isCaughtUp())
-                .setReplaying(status.isReplaying())
-                .setOnePartOf(status.getSegment().getMask() + 1)
-                .setTokenPosition(getPosition(status.getTrackingToken()))
-                .setErrorState(status.isErrorState() ? buildErrorMessage(status.getError()) : "")
-                .build();
+        return new SegmentStatus(
+                status.getSegment().getSegmentId(),
+                status.isCaughtUp(),
+                status.isReplaying(),
+                status.getSegment().getMask() + 1,
+                getPosition(status.getTrackingToken()),
+                status.isErrorState() ? buildErrorMessage(status.getError()) : "");
     }
 
     private static long getPosition(TrackingToken trackingToken) {

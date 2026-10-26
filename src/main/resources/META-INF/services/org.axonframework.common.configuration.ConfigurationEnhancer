@@ -1,1 +1,3 @@
 io.kronosdb.connector.axon.KronosDbConfigurationEnhancer
+io.kronosdb.connector.axon.distributed.command.DistributedCommandBusConfigurationEnhancer
+io.kronosdb.connector.axon.distributed.query.DistributedQueryBusConfigurationEnhancer
