@@ -35,7 +35,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -96,10 +95,11 @@ class NativeConnectionTest {
 
     @Test
     void theHandshakeSendsTheClientsIdentityAndToken() throws Exception {
-        AtomicReference<io.kronosdb.protocol.Hello> seen = new AtomicReference<>();
+        // Set by the server thread, which can finish after the client has its Welcome.
+        CompletableFuture<io.kronosdb.protocol.Hello> seen = new CompletableFuture<>();
         FakeServer server = new FakeServer(session -> {
             try {
-                seen.set(session.handshake());
+                seen.complete(session.handshake());
                 session.next();
             } catch (IOException ignored) {
                 // Client closed.
@@ -111,7 +111,7 @@ class NativeConnectionTest {
         try (NativeConnection connection = NativeConnection.open(options)) {
             assertThat(connection.welcome().serverName()).isEqualTo("fake");
         }
-        io.kronosdb.protocol.Hello hello = seen.get();
+        io.kronosdb.protocol.Hello hello = seen.get(2, TimeUnit.SECONDS);
         assertThat(hello.version()).isEqualTo(1);
         assertThat(hello.recordFormat()).isEqualTo(3);
         assertThat(hello.clientName()).isEqualTo("orders-service");
@@ -122,10 +122,11 @@ class NativeConnectionTest {
 
     @Test
     void withoutATokenTheCredentialKindIsNone() throws Exception {
-        AtomicReference<io.kronosdb.protocol.Hello> seen = new AtomicReference<>();
+        // Set by the server thread, which can finish after the client has its Welcome.
+        CompletableFuture<io.kronosdb.protocol.Hello> seen = new CompletableFuture<>();
         FakeServer server = new FakeServer(session -> {
             try {
-                seen.set(session.handshake());
+                seen.complete(session.handshake());
                 session.next();
             } catch (IOException ignored) {
                 // Client closed.
@@ -133,8 +134,7 @@ class NativeConnectionTest {
         });
         closeables.add(server);
         connect(server).close();
-        Thread.sleep(50);
-        assertThat(seen.get().credentialKind()).isEqualTo(CredentialKind.NONE);
+        assertThat(seen.get(2, TimeUnit.SECONDS).credentialKind()).isEqualTo(CredentialKind.NONE);
     }
 
     @Test
