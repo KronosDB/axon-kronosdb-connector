@@ -187,7 +187,7 @@ Tests name their commands, queries and tags uniquely, so they can share a server
 
 ### CI
 
-`.github/workflows/build.yml` runs `mvn verify` on JDK 21 for Axon 5.3.0, 5.3.3 and 5.4.1. The server tests run in a second job that starts the servers above from a KronosDB image; it is opt-in (manual dispatch with a `kronosdb-image`) until a KronosDB release with the native protocol is on `ghcr.io`.
+`.github/workflows/build.yml` runs `mvn verify` on JDK 21 for Axon 5.3.0, 5.3.3 and 5.4.1. The server tests run in a second job that starts the servers above from `ghcr.io/kronosdb/kronosdb:0.11.0`, the oldest supported server; a manual dispatch can name another `kronosdb-image`.
 
 ## The native protocol codec is vendored
 

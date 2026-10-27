@@ -13,9 +13,8 @@ on:
     inputs:
       kronosdb-image:
         description: >-
-          KronosDB server image with the native protocol (0.11 or later), e.g.
-          ghcr.io/kronosdb/kronosdb:0.11.0. When set, the server-tests job runs
-          the tests that need a live server against it.
+          KronosDB server image to run the server tests against instead of
+          the default, e.g. ghcr.io/kronosdb/kronosdb:latest.
         required: false
         default: ""
 
@@ -49,20 +48,17 @@ jobs:
       - name: Build
         run: mvn -B verify -Daxon.version=${{ matrix.axon }}
 
-  # The tests that need KronosDB. Opt-in: there is no released server image with
-  # the native protocol before KronosDB 0.11.0, so this runs only from a manual
-  # dispatch that names an image. Once 0.11.0 is out, change the `if` to run on
-  # every push and set the image below (see the README).
+  # The tests that need KronosDB, against the oldest server release the
+  # connector supports unless a manual dispatch names another image.
   server-tests:
     name: Server tests (Axon ${{ matrix.axon }})
-    if: github.event_name == 'workflow_dispatch' && inputs.kronosdb-image != ''
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         axon: ["5.3.0", "5.4.1"]
     env:
-      KRONOSDB_IMAGE: ${{ inputs.kronosdb-image }}
+      KRONOSDB_IMAGE: ${{ inputs.kronosdb-image || 'ghcr.io/kronosdb/kronosdb:0.11.0' }}
 
     steps:
       - name: Check out sources
