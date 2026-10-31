@@ -9,12 +9,8 @@ Axon Framework applications can use KronosDB as their infrastructure backbone, i
 | | |
 |---|---|
 | Axon Framework | 5.3 or later (built against 5.4.1; CI runs 5.3.0, 5.3.3 and 5.4.1) |
-| KronosDB | The release after 0.11 or later: a server that speaks native protocol version 2 (connector 0.6 is the one for 0.11) |
+| KronosDB | 0.12 or later |
 | Java | 21 |
-
-**Connector 0.7 needs a server that speaks native protocol version 2**, the next KronosDB release after 0.11. Protocol version 2 gives every stream a byte window, which replaces the per-request credits of version 1, and a version-2 server refuses a version-1 connector. **Connector 0.6 works with KronosDB 0.11** and nothing newer: a version-2 server answers a version-1 client with a `rejected` error telling it to upgrade. Upgrade the server and the connector together.
-
-**Versions before 0.6.0** are the gRPC connector, for KronosDB 0.10 and earlier. KronosDB 0.11 replaced gRPC with the native protocol, which is a breaking change, so 0.6.0 is the first connector for 0.11 and the older ones do not work against it. If you run KronosDB 0.10 or earlier, stay on [v0.1.0](https://github.com/KronosDB/axon-kronosdb-connector/tree/v0.1.0), the last gRPC release.
 
 ## Install
 
