@@ -69,7 +69,7 @@ class AuthNativeServerTest {
         int colon = ADDRESS.lastIndexOf(':');
         Transport transport = new Transport(new ConnectOptions(ADDRESS.substring(0, colon),
                 Integer.parseInt(ADDRESS.substring(colon + 1)), "auth-test", unique("client"), token, null,
-                5000, 10_000, 5000, 0));
+                5000, 10_000, 5000, 0, ConnectOptions.DEFAULT_WINDOW));
         transports.add(transport);
         return transport;
     }

@@ -32,6 +32,9 @@ public class KronosDbConfiguration {
     // Message size
     private int maxMessageSize = 4 * 1024 * 1024; // 4MB
 
+    // Bytes the server may send on each stream ahead of its consumer
+    private int streamWindow = 8 * 1024 * 1024; // 8MB
+
     // How long a query may take; 0 leaves it to the server's [timeouts] query.
     private long queryTimeoutMillis = 0;
 
@@ -161,6 +164,21 @@ public class KronosDbConfiguration {
     }
 
     /**
+     * Each stream's window in bytes: how far the server may send ahead of the
+     * application on one stream (an event processor's, a read of the log, a
+     * query's results). An application that falls behind holds back its own
+     * stream and nothing else, and is never failed for it. A bigger window
+     * fills a link that is further away. At least 65536; the default is 8 MiB.
+     */
+    public int getStreamWindow() {
+        return streamWindow;
+    }
+
+    public void setStreamWindow(int streamWindow) {
+        this.streamWindow = streamWindow;
+    }
+
+    /**
      * How long a query may wait for its answer, in milliseconds. {@code 0}
      * (the default) sends no timeout, so the server's configured query
      * timeout applies.
@@ -239,6 +257,12 @@ public class KronosDbConfiguration {
 
         public Builder maxMessageSize(int size) {
             config.setMaxMessageSize(size);
+            return this;
+        }
+
+        /** Each stream's window in bytes; at least 65536. */
+        public Builder streamWindow(int bytes) {
+            config.setStreamWindow(bytes);
             return this;
         }
 

@@ -5,7 +5,7 @@ import io.kronosdb.protocol.Frames;
 
 /**
  * The sending half of a stream the client opened with
- * {@link NativeConnection#open}: more frames of the client's (credits, a
+ * {@link NativeConnection#open}: more frames of the client's (permits, a
  * handler's answers) and cancellation. The server's frames go to the
  * {@link StreamListener} the stream was opened with.
  */

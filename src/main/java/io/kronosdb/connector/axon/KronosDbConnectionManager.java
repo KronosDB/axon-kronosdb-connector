@@ -73,6 +73,8 @@ public class KronosDbConnectionManager {
             factoryBuilder.maxInboundMessageSize(configuration.getMaxMessageSize());
         }
 
+        factoryBuilder.streamWindow(configuration.getStreamWindow());
+
         this.connectionFactory = factoryBuilder.build();
     }
 

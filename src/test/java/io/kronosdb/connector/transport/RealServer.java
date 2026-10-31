@@ -76,7 +76,7 @@ public final class RealServer {
     }
 
     public static ConnectOptions options(String clientId) {
-        return new ConnectOptions(host(), port(), "real-server-test", clientId, null, null, 5000, 10_000, 5000, 0);
+        return new ConnectOptions(host(), port(), "real-server-test", clientId, null, null, 5000, 10_000, 5000, 0, ConnectOptions.DEFAULT_WINDOW);
     }
 
     /** A transport of its own, as one application instance has. */

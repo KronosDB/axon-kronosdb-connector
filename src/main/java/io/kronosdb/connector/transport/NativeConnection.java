@@ -18,7 +18,9 @@ import io.kronosdb.protocol.Reader;
 import io.kronosdb.protocol.RequestFailed;
 import io.kronosdb.protocol.ServerPing;
 import io.kronosdb.protocol.Welcome;
+import io.kronosdb.protocol.Window;
 import io.kronosdb.protocol.Writer;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,6 +57,13 @@ import java.util.concurrent.locks.ReentrantLock;
  * more work after a few rounds hands the rest to a virtual thread, so one
  * caller is never stuck sending for everyone else.
  *
+ * <h2>Flow control</h2>
+ * Every stream has a window, set in Hello: the bytes of frames the server may
+ * send on it ahead of the client. The connection reads every frame as it
+ * arrives and never waits for a consumer; a stream's {@link StreamWindow}
+ * grants the bytes back as its consumer takes frames, so a consumer that falls
+ * behind holds back its own stream and nothing else.
+ *
  * <h2>Memory</h2>
  * Each received frame is read into its own array, and decoded bytes (event
  * payloads, tags) are slices of it; nothing is copied until the caller does.
@@ -85,7 +94,7 @@ public final class NativeConnection implements AutoCloseable {
     private final long idleTimeoutMillis;
     private final boolean clientPings;
 
-    private final ConcurrentHashMap<Integer, StreamListener> streams = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Stream> streams = new ConcurrentHashMap<>();
     private final AtomicInteger lastStreamId = new AtomicInteger();
 
     private final ReentrantLock lock = new ReentrantLock();
@@ -160,7 +169,8 @@ public final class NativeConnection implements AutoCloseable {
                     options.clientName(),
                     options.clientId(),
                     hasToken ? CredentialKind.TOKEN : CredentialKind.NONE,
-                    hasToken ? token : ""));
+                    hasToken ? token : "",
+                    options.window()));
             out.write(hello.array(), 0, hello.position());
             out.flush();
 
@@ -256,9 +266,9 @@ public final class NativeConnection implements AutoCloseable {
             lock.unlock();
         }
         for (Integer id : streams.keySet()) {
-            StreamListener listener = streams.remove(id);
-            if (listener != null) {
-                notifyFailure(listener, cause);
+            Stream stream = streams.remove(id);
+            if (stream != null) {
+                notifyFailure(stream.listener, cause);
             }
         }
     }
@@ -285,34 +295,38 @@ public final class NativeConnection implements AutoCloseable {
     public CompletableFuture<Frame> request(Frame request) {
         Unary reply = new Unary();
         int id;
+        Stream stream;
         try {
-            id = register(reply);
+            stream = register(reply, false);
+            id = stream.id;
         } catch (RuntimeException e) {
             return CompletableFuture.failedFuture(e);
         }
         try {
             send(id, Frames.FLAG_END, request, true);
         } catch (RuntimeException e) {
-            streams.remove(id, reply);
+            streams.remove(id, stream);
             reply.completeExceptionally(e);
         }
         return reply;
     }
 
     /**
-     * Opens a stream with its first frame. With {@code end} the client sends
-     * nothing more and only reads (a Source); without it the client may keep
-     * sending on the returned stream (credits, a handler's answers).
+     * Opens a stream with its first frame. With {@code end} the client says
+     * nothing more in the stream and only reads (a Source, a subscription);
+     * without it the client may keep sending on the returned stream (permits,
+     * a handler's answers). Either way the stream's window is granted back as
+     * the listener's consumer takes the frames, see {@link StreamListener}.
      */
     public ClientStream open(Frame first, boolean end, StreamListener listener) {
-        int id = register(listener);
+        Stream stream = register(listener, true);
         try {
-            send(id, end ? Frames.FLAG_END : 0, first, true);
+            send(stream.id, end ? Frames.FLAG_END : 0, first, true);
         } catch (RuntimeException e) {
-            streams.remove(id, listener);
+            streams.remove(stream.id, stream);
             throw e;
         }
-        return new ClientStream(this, id);
+        return new ClientStream(this, stream.id);
     }
 
     /**
@@ -364,20 +378,49 @@ public final class NativeConnection implements AutoCloseable {
 
     // --------------------------------------------------------------- streams
 
-    private int register(StreamListener listener) {
+    /** A stream the client opened: what receives its frames, and its window unless it is a unary request. */
+    private static final class Stream {
+        final int id;
+        final StreamListener listener;
+        final @Nullable StreamWindow window;
+
+        Stream(int id, StreamListener listener, @Nullable StreamWindow window) {
+            this.id = id;
+            this.listener = listener;
+            this.window = window;
+        }
+    }
+
+    private Stream register(StreamListener listener, boolean windowed) {
         if (closed.get()) {
             throw closedException();
         }
-        int id;
+        Stream stream;
         do {
-            id = lastStreamId.incrementAndGet();
+            int id = lastStreamId.incrementAndGet();
             // Ids wrap past 2^32 and skip 0, which is the connection itself.
-        } while (id == 0 || streams.putIfAbsent(id, listener) != null);
+            stream = new Stream(id, listener, windowed ? new StreamWindow(this, id, options.window()) : null);
+        } while (stream.id == 0 || streams.putIfAbsent(stream.id, stream) != null);
         if (closed.get()) {
-            streams.remove(id, listener);
+            streams.remove(stream.id, stream);
             throw closedException();
         }
-        return id;
+        return stream;
+    }
+
+    /**
+     * Grants the server {@code bytes} more of a stream's window, as consumers
+     * take frames. Never waits, and sends nothing for a stream that finished.
+     */
+    void grant(int id, long bytes) {
+        if (closed.get() || !streams.containsKey(id)) {
+            return;
+        }
+        try {
+            send(id, 0, new Window(bytes), false);
+        } catch (RuntimeException e) {
+            // The connection is going away; the stream fails on its own.
+        }
     }
 
     boolean release(int id) {
@@ -485,7 +528,8 @@ public final class NativeConnection implements AutoCloseable {
                 }
                 byte[] body = new byte[(int) len - (Frames.HEADER_LEN - 4)];
                 readFully(body, 0, body.length, false);
-                dispatch(Frames.kind(header, 0), Frames.flags(header, 0), Frames.stream(header, 0), body);
+                dispatch(Frames.kind(header, 0), Frames.flags(header, 0), Frames.stream(header, 0), body,
+                        Frames.HEADER_LEN + body.length);
             }
         } catch (IOException e) {
             fail(new ConnectionClosedException("connection to " + peer + " lost: " + e.getMessage(), e));
@@ -541,7 +585,7 @@ public final class NativeConnection implements AutoCloseable {
         return true;
     }
 
-    private void dispatch(int kind, int flags, int stream, byte[] body) {
+    private void dispatch(int kind, int flags, int stream, byte[] body, int size) {
         if ((kind & 0x8000) == 0) {
             throw new ProtocolException("the server sent a client frame, kind " + kind);
         }
@@ -549,11 +593,12 @@ public final class NativeConnection implements AutoCloseable {
             control(kind, body);
             return;
         }
-        StreamListener listener = streams.get(stream);
-        if (listener == null) {
+        Stream entry = streams.get(stream);
+        if (entry == null) {
             // The request finished or was cancelled; late frames are dropped.
             return;
         }
+        StreamListener listener = entry.listener;
         Frame frame = Frames.decode(kind, new Reader(body));
         if (frame == null) {
             streams.remove(stream);
@@ -565,14 +610,23 @@ public final class NativeConnection implements AutoCloseable {
             notifyFailure(listener, new RequestFailedException(failed.code(), failed.message()));
             return;
         }
-        boolean last = (flags & Frames.FLAG_END) != 0 || listener instanceof Unary;
+        boolean last = (flags & Frames.FLAG_END) != 0 || entry.window == null;
         if (last) {
             streams.remove(stream);
         }
         try {
-            listener.onFrame(frame, last);
+            if (listener instanceof StreamListener.Paced paced) {
+                // The frame that ends a stream spends none of its window.
+                paced.onFrame(frame, last, last ? 0 : size, entry.window);
+            } else {
+                listener.onFrame(frame, last);
+            }
         } catch (RuntimeException e) {
             logger.warn("A stream listener failed while handling {}.", frame.getClass().getSimpleName(), e);
+        }
+        if (!last && !(listener instanceof StreamListener.Paced)) {
+            // Taken as soon as the listener has it.
+            entry.window.consumed(size);
         }
     }
 

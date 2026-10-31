@@ -10,7 +10,7 @@ import io.kronosdb.protocol.Command;
 import io.kronosdb.protocol.CommandHandled;
 import io.kronosdb.protocol.CommandResponse;
 import io.kronosdb.protocol.CommandResult;
-import io.kronosdb.protocol.Credit;
+import io.kronosdb.protocol.Permits;
 import io.kronosdb.protocol.DispatchCommand;
 import io.kronosdb.protocol.DispatchQuery;
 import io.kronosdb.protocol.GetPlatformInfo;
@@ -132,14 +132,14 @@ class MessagingChannelsTest {
     // ------------------------------------------------------------- commands
 
     @Test
-    void aCommandHandlerSubscribesGrantsCreditAndAnswersWhatItIsSent() throws Exception {
+    void aCommandHandlerSubscribesGrantsPermitsAndAnswersWhatItIsSent() throws Exception {
         CompletableFuture<OpenCommandHandlers> opened = new CompletableFuture<>();
         CompletableFuture<SubscribeCommand> subscribed = new CompletableFuture<>();
-        CompletableFuture<Credit> credit = new CompletableFuture<>();
+        CompletableFuture<Permits> permits = new CompletableFuture<>();
         CompletableFuture<CommandHandled> handled = new CompletableFuture<>();
         Transport transport = transport(session -> {
             FakeServer.Session.Incoming open = session.next(OpenCommandHandlers.class);
-            credit.complete((Credit) session.next(Credit.class).frame());
+            permits.complete((Permits) session.next(Permits.class).frame());
             assertThat(open.end()).as("a handler stream is not ended by the client").isFalse();
             opened.complete((OpenCommandHandlers) open.frame());
             FakeServer.Session.Incoming subscribe = session.next(SubscribeCommand.class);
@@ -166,7 +166,7 @@ class MessagingChannelsTest {
         assertThat(await(subscribed).loadFactor()).isEqualTo(3);
         assertThat(await(subscribed).instructionId()).isNotEmpty();
         await(registration.ackFuture());
-        assertThat(await(credit).credits()).isEqualTo(500);
+        assertThat(await(permits).count()).isEqualTo(500);
 
         CommandHandled answer = await(handled);
         assertThat(received).extracting(Command::messageId).containsExactly("c-1");
@@ -180,7 +180,7 @@ class MessagingChannelsTest {
         CompletableFuture<CommandHandled> handled = new CompletableFuture<>();
         Transport transport = transport(session -> {
             FakeServer.Session.Incoming open = session.next(OpenCommandHandlers.class);
-            session.next(Credit.class);
+            session.next(Permits.class);
             session.next(SubscribeCommand.class);
             session.send(open.stream(), 0, new HandleCommand(command("c-9", "Boom")));
             handled.complete((CommandHandled) session.next(CommandHandled.class).frame());
@@ -202,7 +202,7 @@ class MessagingChannelsTest {
         CompletableFuture<UnsubscribeCommand> unsubscribed = new CompletableFuture<>();
         Transport transport = transport(session -> {
             session.next(OpenCommandHandlers.class);
-            session.next(Credit.class);
+            session.next(Permits.class);
             session.next(SubscribeCommand.class);
             unsubscribed.complete((UnsubscribeCommand) session.next(UnsubscribeCommand.class).frame());
             session.next();
@@ -220,7 +220,7 @@ class MessagingChannelsTest {
         CompletableFuture<SubscribeCommand> again = new CompletableFuture<>();
         Transport transport = transport(session -> {
             session.next(OpenCommandHandlers.class);
-            session.next(Credit.class);
+            session.next(Permits.class);
             SubscribeCommand subscribe = (SubscribeCommand) session.next(SubscribeCommand.class).frame();
             if (streams.getAndIncrement() == 0) {
                 session.close(); // The first connection is lost.
@@ -286,7 +286,7 @@ class MessagingChannelsTest {
         CompletableFuture<FakeServer.Session.Incoming> cancelled = new CompletableFuture<>();
         Transport transport = transport(session -> {
             session.next(OpenCommandHandlers.class);
-            session.next(Credit.class);
+            session.next(Permits.class);
             session.next(SubscribeCommand.class);
             cancelled.complete(session.next(Cancel.class));
             session.next();
@@ -352,7 +352,7 @@ class MessagingChannelsTest {
         CompletableFuture<Void> done = new CompletableFuture<>();
         Transport transport = transport(session -> {
             FakeServer.Session.Incoming open = session.next(OpenQueryHandlers.class);
-            session.next(Credit.class);
+            session.next(Permits.class);
             FakeServer.Session.Incoming subscribe = session.next(SubscribeQuery.class);
             subscribed.complete((SubscribeQuery) subscribe.frame());
             session.send(open.stream(), 0, new ServerAck(
@@ -392,7 +392,7 @@ class MessagingChannelsTest {
     @Test
     void aSubscriptionQueryGetsTheInitialResultUpdatesAndTheEnd() throws Exception {
         CompletableFuture<OpenSubscriptionQuery> opened = new CompletableFuture<>();
-        CompletableFuture<Credit> credit = new CompletableFuture<>();
+        CompletableFuture<Permits> permits = new CompletableFuture<>();
         CompletableFuture<FakeServer.Session.Incoming> cancel = new CompletableFuture<>();
         Transport transport = transport(session -> {
             FakeServer.Session.Incoming open = session.next(OpenSubscriptionQuery.class);
@@ -405,7 +405,7 @@ class MessagingChannelsTest {
             session.send(open.stream(), 0, new SubscriptionQueryEvent(id,
                     new SubscriptionEvent.OfUpdate(new QueryUpdate("u1", payload("Update", "next"), List.of(),
                             "h", "orders", "", null))));
-            credit.complete((Credit) session.next(Credit.class).frame());
+            permits.complete((Permits) session.next(Permits.class).frame());
             session.send(open.stream(), 0, new SubscriptionQueryEvent(id,
                     new SubscriptionEvent.OfComplete(new SubscriptionEnd("h", "orders"))));
             cancel.complete(session.next(Cancel.class));
@@ -430,7 +430,7 @@ class MessagingChannelsTest {
         assertThat(got.get(0)).isInstanceOf(SubscriptionEvent.OfInitialResult.class);
         assertThat(got.get(1)).isInstanceOf(SubscriptionEvent.OfUpdate.class);
         assertThat(got.get(2)).isInstanceOf(SubscriptionEvent.OfComplete.class);
-        assertThat(await(credit).credits()).isEqualTo(8);
+        assertThat(await(permits).count()).isEqualTo(8);
 
         subscription.close();
         assertThat(await(cancel).end()).isTrue();
@@ -442,7 +442,7 @@ class MessagingChannelsTest {
         CompletableFuture<Void> three = new CompletableFuture<>();
         Transport transport = transport(session -> {
             FakeServer.Session.Incoming open = session.next(OpenQueryHandlers.class);
-            session.next(Credit.class);
+            session.next(Permits.class);
             session.next(SubscribeQuery.class);
             session.send(open.stream(), 0, new HandleSubscriptionQuery(
                     new SubscriptionQuery("sub-1", query("q-1", "Watch"), 16)));
@@ -491,13 +491,13 @@ class MessagingChannelsTest {
     }
 
     @Test
-    void updatesBeyondTheSubscribersCreditsWaitForMoreAndTheCompletionFollowsThem() throws Exception {
+    void updatesBeyondTheSubscribersPermitsWaitForMoreAndTheCompletionFollowsThem() throws Exception {
         List<Object> sent = new CopyOnWriteArrayList<>();
         CompletableFuture<Void> initial = new CompletableFuture<>();
         CompletableFuture<Void> all = new CompletableFuture<>();
         Transport transport = transport(session -> {
             FakeServer.Session.Incoming open = session.next(OpenQueryHandlers.class);
-            session.next(Credit.class);
+            session.next(Permits.class);
             session.next(SubscribeQuery.class);
             // The subscriber's window is two updates.
             session.send(open.stream(), 0, new HandleSubscriptionQuery(

@@ -9,8 +9,10 @@ Axon Framework applications can use KronosDB as their infrastructure backbone, i
 | | |
 |---|---|
 | Axon Framework | 5.3 or later (built against 5.4.1; CI runs 5.3.0, 5.3.3 and 5.4.1) |
-| KronosDB | 0.11 or later |
+| KronosDB | The release after 0.11 or later: a server that speaks native protocol version 2 (connector 0.6 is the one for 0.11) |
 | Java | 21 |
+
+**Connector 0.7 needs a server that speaks native protocol version 2**, the next KronosDB release after 0.11. Protocol version 2 gives every stream a byte window, which replaces the per-request credits of version 1, and a version-2 server refuses a version-1 connector. **Connector 0.6 works with KronosDB 0.11** and nothing newer: a version-2 server answers a version-1 client with a `rejected` error telling it to upgrade. Upgrade the server and the connector together.
 
 **Versions before 0.6.0** are the gRPC connector, for KronosDB 0.10 and earlier. KronosDB 0.11 replaced gRPC with the native protocol, which is a breaking change, so 0.6.0 is the first connector for 0.11 and the older ones do not work against it. If you run KronosDB 0.10 or earlier, stay on [v0.1.0](https://github.com/KronosDB/axon-kronosdb-connector/tree/v0.1.0), the last gRPC release.
 
@@ -30,7 +32,7 @@ Public builds come from [JitPack](https://jitpack.io), built from this repositor
     <dependency>
         <groupId>com.github.KronosDB</groupId>
         <artifactId>axon-kronosdb-connector</artifactId>
-        <version>v0.6.0</version>
+        <version>v0.7.0</version>
     </dependency>
     <dependency>
         <groupId>org.axonframework</groupId>
@@ -53,7 +55,7 @@ repositories {
 }
 
 dependencies {
-    implementation("com.github.KronosDB:axon-kronosdb-connector:v0.6.0")
+    implementation("com.github.KronosDB:axon-kronosdb-connector:v0.7.0")
     implementation("org.axonframework:axon-messaging:5.4.1")
     implementation("org.axonframework:axon-eventsourcing:5.4.1")
 }
@@ -135,6 +137,7 @@ Axon Framework 5.1 moved the distributed command bus, the distributed query bus 
 | `heartbeatEnabled` | `true` | Send periodic platform heartbeats (the platform stream also answers the server's) |
 | `heartbeatInterval` | `5000` | Heartbeat interval (ms) |
 | `maxMessageSize` | `4MB` | Largest frame to send or accept; can only lower the limit the server announces |
+| `streamWindow` | `8MB` | Bytes (at least `65536`) the server may send on each stream ahead of your application: an event processor's stream, a read of the log, a query's results. An application that falls behind holds back its own stream and nothing else, and is never failed for it. Raise it for a link with a long round trip |
 | `queryTimeoutMillis` | `0` | How long a query may wait for its answer; `0` sends none, so the server's `[timeouts] query` (30 s by default) applies |
 
 ## Building
@@ -151,7 +154,7 @@ Needs Java 21 and Maven 3.9+, and nothing but Maven Central: the native protocol
 
 ### Running the server tests
 
-Start a KronosDB 0.11+ server with the short timeouts the timeout and heartbeat tests rely on, from a KronosDB checkout or the `ghcr.io/kronosdb/kronosdb` image:
+Start a KronosDB server speaking native protocol version 2 with the short timeouts the timeout and heartbeat tests rely on, from a KronosDB checkout or the `ghcr.io/kronosdb/kronosdb` image:
 
 ```bash
 kronosdb-server --dev --listen 127.0.0.1:50051 --admin-listen 127.0.0.1:9240 \
@@ -187,7 +190,7 @@ Tests name their commands, queries and tags uniquely, so they can share a server
 
 ### CI
 
-`.github/workflows/build.yml` runs `mvn verify` on JDK 21 for Axon 5.3.0, 5.3.3 and 5.4.1. The server tests run in a second job that starts the servers above from `ghcr.io/kronosdb/kronosdb:0.11.0`, the oldest supported server; a manual dispatch can name another `kronosdb-image`.
+`.github/workflows/build.yml` runs `mvn verify` on JDK 21 for Axon 5.3.0, 5.3.3 and 5.4.1. The server tests run in a second job that starts the servers above from the `ghcr.io/kronosdb/kronosdb` image pinned in the workflow, which must speak native protocol version 2; a manual dispatch can name another `kronosdb-image`.
 
 ## The native protocol codec is vendored
 
@@ -200,7 +203,7 @@ The wire format is generated in the KronosDB repository from `protocol/kronosdb.
 | `protocol/fixtures/` | The golden frames and their canonical JSON |
 | `src/test/java/io/kronosdb/protocol/` | `ConformanceTest` (every fixture decodes and re-encodes byte for byte), its JSON bridge, and `SchemaHashTest` |
 
-`scripts/vendor-protocol.sh <path to a KronosDB checkout>` refreshes all of it. It prints the new `SCHEMA_HASH`; pin that in `SchemaHashTest.PINNED_SCHEMA_HASH`. That one-line change is the review point for "the wire changed", and the conformance suite proves the new codec matches the new fixtures. Vendored with schema hash `a65e0eff`, from KronosDB 0.11.
+`scripts/vendor-protocol.sh <path to a KronosDB checkout>` refreshes all of it. It prints the new `SCHEMA_HASH`; pin that in `SchemaHashTest.PINNED_SCHEMA_HASH`. That one-line change is the review point for "the wire changed", and the conformance suite proves the new codec matches the new fixtures. Vendored with schema hash `56aaeb68`, native protocol version 2.
 
 ## License
 

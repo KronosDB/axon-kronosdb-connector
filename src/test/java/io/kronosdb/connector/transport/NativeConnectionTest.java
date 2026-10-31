@@ -6,22 +6,26 @@ import io.kronosdb.protocol.Cancel;
 import io.kronosdb.protocol.ClientPong;
 import io.kronosdb.protocol.ContextBound;
 import io.kronosdb.protocol.CredentialKind;
-import io.kronosdb.protocol.Credit;
 import io.kronosdb.protocol.ErrorCode;
 import io.kronosdb.protocol.EventRecord;
 import io.kronosdb.protocol.Events;
 import io.kronosdb.protocol.Frame;
+import io.kronosdb.protocol.Frames;
 import io.kronosdb.protocol.GetHead;
 import io.kronosdb.protocol.GetTail;
 import io.kronosdb.protocol.GoAway;
 import io.kronosdb.protocol.Head;
 import io.kronosdb.protocol.Ping;
+import io.kronosdb.protocol.OpenCommandHandlers;
+import io.kronosdb.protocol.Permits;
 import io.kronosdb.protocol.Pong;
 import io.kronosdb.protocol.RequestFailed;
 import io.kronosdb.protocol.ServerPing;
 import io.kronosdb.protocol.Source;
 import io.kronosdb.protocol.StoredRecord;
 import io.kronosdb.protocol.Subscribe;
+import io.kronosdb.protocol.Window;
+import io.kronosdb.protocol.Writer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -29,9 +33,11 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -62,7 +68,7 @@ class NativeConnectionTest {
     }
 
     static ConnectOptions options(FakeServer server) {
-        return new ConnectOptions("127.0.0.1", server.port(), "tester", "client-1", null, null, 2000, 0, 0, 0);
+        return new ConnectOptions("127.0.0.1", server.port(), "tester", "client-1", null, null, 2000, 0, 0, 0, ConnectOptions.DEFAULT_WINDOW);
     }
 
     private NativeConnection connect(FakeServer server) {
@@ -107,13 +113,14 @@ class NativeConnectionTest {
         });
         closeables.add(server);
         ConnectOptions options = new ConnectOptions("127.0.0.1", server.port(), "orders-service", "instance-7",
-                "s3cret", null, 2000, 0, 0, 0);
+                "s3cret", null, 2000, 0, 0, 0, ConnectOptions.DEFAULT_WINDOW);
         try (NativeConnection connection = NativeConnection.open(options)) {
             assertThat(connection.welcome().serverName()).isEqualTo("fake");
         }
         io.kronosdb.protocol.Hello hello = seen.get(2, TimeUnit.SECONDS);
-        assertThat(hello.version()).isEqualTo(1);
+        assertThat(hello.version()).isEqualTo(2);
         assertThat(hello.recordFormat()).isEqualTo(3);
+        assertThat(hello.window()).as("each stream's window").isEqualTo(8 * 1024 * 1024);
         assertThat(hello.clientName()).isEqualTo("orders-service");
         assertThat(hello.clientId()).isEqualTo("instance-7");
         assertThat(hello.credentialKind()).isEqualTo(CredentialKind.TOKEN);
@@ -155,7 +162,7 @@ class NativeConnectionTest {
 
     @Test
     void aServerThatIsNotThereIsAConnectionError() {
-        ConnectOptions options = new ConnectOptions("127.0.0.1", 1, "t", "c", null, null, 500, 0, 0, 0);
+        ConnectOptions options = new ConnectOptions("127.0.0.1", 1, "t", "c", null, null, 500, 0, 0, 0, ConnectOptions.DEFAULT_WINDOW);
         assertThatThrownBy(() -> NativeConnection.open(options)).isInstanceOf(ConnectionClosedException.class);
     }
 
@@ -251,7 +258,7 @@ class NativeConnectionTest {
         CompletableFuture<FakeServer.Session.Incoming> cancel = new CompletableFuture<>();
         FakeServer server = server(script(session -> {
             FakeServer.Session.Incoming subscribe = session.next(Subscribe.class);
-            assertThat(subscribe.end()).as("a subscription is not ended by the client").isFalse();
+            assertThat(subscribe.end()).as("a subscription says nothing more in its stream").isTrue();
             cancel.complete(session.next(Cancel.class));
             // The stream is gone at the client; this must be ignored, not break the connection.
             session.send(subscribe.stream(), 0, new Events(List.of(record(9)), null));
@@ -262,7 +269,7 @@ class NativeConnectionTest {
         NativeConnection connection = connect(server);
         List<Frame> received = new CopyOnWriteArrayList<>();
         ClientStream stream = connection.open(
-                new Subscribe(0, 0, List.of(), List.of(), 10, 0, 0), false, new StreamListener() {
+                new Subscribe(0, 0, List.of(), List.of(), 10, 0), true, new StreamListener() {
                     @Override
                     public void onFrame(Frame frame, boolean last) {
                         received.add(frame);
@@ -281,14 +288,15 @@ class NativeConnectionTest {
     }
 
     @Test
-    void creditsFlowOnTheOpenStream() throws Exception {
-        CompletableFuture<Credit> credit = new CompletableFuture<>();
+    void permitsFlowOnTheOpenStream() throws Exception {
+        CompletableFuture<Permits> permits = new CompletableFuture<>();
         FakeServer server = server(script(session -> {
-            session.next(Subscribe.class);
-            credit.complete((Credit) session.next(Credit.class).frame());
+            FakeServer.Session.Incoming open = session.next(OpenCommandHandlers.class);
+            assertThat(open.end()).as("a handler stream stays open for the client's answers").isFalse();
+            permits.complete((Permits) session.next(Permits.class).frame());
         }));
         NativeConnection connection = connect(server);
-        ClientStream stream = connection.open(new Subscribe(0, 0, List.of(), List.of(), 10, 0, 0), false,
+        ClientStream stream = connection.open(new OpenCommandHandlers(0, "client-1", "tester"), false,
                 new StreamListener() {
                     @Override
                     public void onFrame(Frame frame, boolean last) {
@@ -298,8 +306,8 @@ class NativeConnectionTest {
                     public void onFailure(Throwable cause) {
                     }
                 });
-        stream.send(new Credit(250));
-        assertThat(await(credit).credits()).isEqualTo(250);
+        stream.send(new Permits(250));
+        assertThat(await(permits).count()).isEqualTo(250);
     }
 
     @Test
@@ -323,7 +331,7 @@ class NativeConnectionTest {
                 session.send(0, 0, new Pong(((Ping) in.frame()).nonce()));
             }
         }));
-        ConnectOptions options = new ConnectOptions("127.0.0.1", server.port(), "t", "c", null, null, 2000, 100, 500, 0);
+        ConnectOptions options = new ConnectOptions("127.0.0.1", server.port(), "t", "c", null, null, 2000, 100, 500, 0, ConnectOptions.DEFAULT_WINDOW);
         NativeConnection connection = NativeConnection.open(options);
         closeables.add(connection);
         Thread.sleep(700);
@@ -338,7 +346,7 @@ class NativeConnectionTest {
                 session.next(); // Reads everything, answers nothing, not even pings.
             }
         }));
-        ConnectOptions options = new ConnectOptions("127.0.0.1", server.port(), "t", "c", null, null, 2000, 100, 200, 0);
+        ConnectOptions options = new ConnectOptions("127.0.0.1", server.port(), "t", "c", null, null, 2000, 100, 200, 0, ConnectOptions.DEFAULT_WINDOW);
         NativeConnection connection = NativeConnection.open(options);
         closeables.add(connection);
         CompletableFuture<Frame> stuck = connection.request(new GetHead(0));
@@ -570,6 +578,233 @@ class NativeConnectionTest {
                 .cause()
                 .isInstanceOf(ConnectionClosedException.class);
         assertThat(connection.isClosed()).isTrue();
+    }
+
+    // ------------------------------------------------------------ the window
+
+    /** An Events frame with one event carrying {@code payloadBytes} bytes of payload. */
+    private static Events eventsOf(long position, int payloadBytes) {
+        return new Events(List.of(new StoredRecord(0, new EventRecord(position, "id-" + position, "Name", "1",
+                1000 + position, List.of(), List.of(), ByteBuffer.wrap(new byte[payloadBytes])))), null);
+    }
+
+    /** The frame's whole size on the wire, length prefix included: what a window counts. */
+    private static int wireSize(Frame frame) {
+        return Frames.encode(new Writer(256), 1, 0, frame);
+    }
+
+    private static ConnectOptions windowed(FakeServer server, int window) {
+        return new ConnectOptions("127.0.0.1", server.port(), "tester", "client-1", null, null, 2000, 0, 0, 0, window);
+    }
+
+    @Test
+    void theWindowIsGrantedBackAtHalfForTheBytesTheConsumerTook() throws Exception {
+        int window = ConnectOptions.MIN_WINDOW;
+        Events frame = eventsOf(0, 6000);
+        int size = wireSize(frame);
+        // The frames that take the accumulated bytes to half the window.
+        int perGrant = (window / 2 + size - 1) / size;
+        BlockingQueue<FakeServer.Session.Incoming> seen = new LinkedBlockingQueue<>();
+        CompletableFuture<Void> sent = new CompletableFuture<>();
+        AtomicInteger streamId = new AtomicInteger();
+        FakeServer server = server(script(session -> {
+            FakeServer.Session.Incoming source = session.next(Source.class);
+            assertThat(source.end()).isTrue();
+            streamId.set(source.stream());
+            // Fewer frames than the window holds, so the script never waits for a grant.
+            for (int i = 0; i < 2 * perGrant; i++) {
+                session.send(source.stream(), 0, frame);
+            }
+            sent.complete(null);
+            while (true) {
+                seen.add(session.next());
+            }
+        }));
+        NativeConnection connection = NativeConnection.open(windowed(server, window));
+        closeables.add(connection);
+        ResultStream<Events> results = new ResultStream<>(f -> f instanceof Events events ? events : null);
+        results.attach(connection.open(new Source(0, 0, List.of(), 0), true, results.listener()));
+        await(sent);
+        Thread.sleep(200);
+
+        assertThat(seen).as("nothing is granted for frames nobody has taken").isEmpty();
+
+        for (int i = 0; i < perGrant - 1; i++) {
+            assertThat(results.nextIfAvailable(2, TimeUnit.SECONDS)).isNotNull();
+        }
+        Thread.sleep(200);
+        assertThat(seen).as("not yet half the window").isEmpty();
+
+        assertThat(results.nextIfAvailable(2, TimeUnit.SECONDS)).isNotNull();
+        FakeServer.Session.Incoming grant = seen.poll(2, TimeUnit.SECONDS);
+        assertThat(grant).as("half the window has been taken").isNotNull();
+        assertThat(grant.frame()).isEqualTo(new Window((long) perGrant * size));
+        assertThat(grant.stream()).isEqualTo(streamId.get());
+        assertThat(grant.end()).as("a grant is about the stream, it does not end it").isFalse();
+
+        // Peeking takes nothing; the next grant needs another half window of taken frames.
+        assertThat(results.peek()).isNotNull();
+        Thread.sleep(200);
+        assertThat(seen).isEmpty();
+        for (int i = 0; i < perGrant; i++) {
+            assertThat(results.nextIfAvailable(2, TimeUnit.SECONDS)).isNotNull();
+        }
+        FakeServer.Session.Incoming second = seen.poll(2, TimeUnit.SECONDS);
+        assertThat(second).isNotNull();
+        assertThat(second.frame()).isEqualTo(new Window((long) perGrant * size));
+    }
+
+    @Test
+    void theFrameThatEndsAStreamSpendsNoWindow() throws Exception {
+        int window = ConnectOptions.MIN_WINDOW;
+        Events big = eventsOf(0, window);
+        BlockingQueue<FakeServer.Session.Incoming> seen = new LinkedBlockingQueue<>();
+        FakeServer server = server(script(session -> {
+            FakeServer.Session.Incoming source = session.next(Source.class);
+            session.reply(source.stream(), big);
+            while (true) {
+                seen.add(session.next());
+            }
+        }));
+        NativeConnection connection = NativeConnection.open(windowed(server, window));
+        closeables.add(connection);
+        ResultStream<Events> results = new ResultStream<>(f -> f instanceof Events events ? events : null);
+        results.attach(connection.open(new Source(0, 0, List.of(), 0), true, results.listener()));
+        assertThat(results.nextIfAvailable(5, TimeUnit.SECONDS)).isNotNull();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!results.isCompleted() && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        assertThat(results.isCompleted()).isTrue();
+        Thread.sleep(200);
+        assertThat(seen).as("a frame larger than the window, but the last: nothing to grant").isEmpty();
+    }
+
+    @Test
+    void aFrameWithNothingForTheConsumerIsGrantedBackAtOnce() throws Exception {
+        int window = ConnectOptions.MIN_WINDOW;
+        Events frame = eventsOf(0, 6000);
+        int size = wireSize(frame);
+        int perGrant = (window / 2 + size - 1) / size;
+        BlockingQueue<FakeServer.Session.Incoming> seen = new LinkedBlockingQueue<>();
+        FakeServer server = server(script(session -> {
+            FakeServer.Session.Incoming source = session.next(Source.class);
+            for (int i = 0; i < perGrant; i++) {
+                session.send(source.stream(), 0, frame);
+            }
+            while (true) {
+                seen.add(session.next());
+            }
+        }));
+        NativeConnection connection = NativeConnection.open(windowed(server, window));
+        closeables.add(connection);
+        // Maps every frame to no element, as a stream does with the frames it skips.
+        ResultStream<Events> results = new ResultStream<>(f -> null);
+        results.attach(connection.open(new Source(0, 0, List.of(), 0), true, results.listener()));
+        FakeServer.Session.Incoming grant = seen.poll(5, TimeUnit.SECONDS);
+        assertThat(grant).isNotNull();
+        assertThat(grant.frame()).isEqualTo(new Window((long) perGrant * size));
+    }
+
+    @Test
+    void aListenerThatTakesFramesOnDeliveryHasThemGrantedOnDelivery() throws Exception {
+        int window = ConnectOptions.MIN_WINDOW;
+        Events frame = eventsOf(0, 6000);
+        int size = wireSize(frame);
+        int perGrant = (window / 2 + size - 1) / size;
+        BlockingQueue<FakeServer.Session.Incoming> seen = new LinkedBlockingQueue<>();
+        FakeServer server = server(script(session -> {
+            FakeServer.Session.Incoming open = session.next(OpenCommandHandlers.class);
+            for (int i = 0; i < perGrant; i++) {
+                session.send(open.stream(), 0, frame);
+            }
+            while (true) {
+                seen.add(session.next());
+            }
+        }));
+        NativeConnection connection = NativeConnection.open(windowed(server, window));
+        closeables.add(connection);
+        connection.open(new OpenCommandHandlers(0, "client-1", "tester"), false, new StreamListener() {
+            @Override
+            public void onFrame(Frame frame, boolean last) {
+            }
+
+            @Override
+            public void onFailure(Throwable cause) {
+            }
+        });
+        FakeServer.Session.Incoming grant = seen.poll(5, TimeUnit.SECONDS);
+        assertThat(grant).isNotNull();
+        assertThat(grant.frame()).isEqualTo(new Window((long) perGrant * size));
+    }
+
+    /** Reads what the client sends: answers a GetHead, and returns the bytes of a Window grant. */
+    private static long answerOrGrant(FakeServer.Session session, AtomicInteger grantedBytes) throws IOException {
+        FakeServer.Session.Incoming in = session.next();
+        if (in.frame() instanceof Window grant) {
+            grantedBytes.addAndGet((int) grant.bytes());
+            return grant.bytes();
+        }
+        session.reply(in.stream(), new Head(1));
+        return 0;
+    }
+
+    @Test
+    void aSlowConsumerIsPacedNotFailed() throws Exception {
+        // A server that keeps to the window: it sends while the window is positive, then waits for a grant.
+        int window = ConnectOptions.MIN_WINDOW;
+        Events frame = eventsOf(0, 5000);
+        int size = wireSize(frame);
+        int total = 60;
+        AtomicInteger sentBytes = new AtomicInteger();
+        AtomicInteger grantedBytes = new AtomicInteger();
+        AtomicInteger deepestLead = new AtomicInteger();
+        FakeServer server = server(script(session -> {
+            FakeServer.Session.Incoming source = session.next(Source.class);
+            int sent = 0;
+            long open = window;
+            while (sent < total) {
+                if (open > 0) {
+                    boolean last = sent == total - 1;
+                    session.send(source.stream(), last ? Frames.FLAG_END : 0, frame);
+                    sent++;
+                    if (!last) {
+                        open -= size;
+                        sentBytes.addAndGet(size);
+                        deepestLead.accumulateAndGet(sentBytes.get() - grantedBytes.get(), Math::max);
+                    }
+                } else {
+                    open += answerOrGrant(session, grantedBytes);
+                }
+            }
+            while (true) {
+                answerOrGrant(session, grantedBytes);
+            }
+        }));
+        NativeConnection connection = NativeConnection.open(windowed(server, window));
+        closeables.add(connection);
+        ResultStream<Events> results = new ResultStream<>(f -> f instanceof Events events ? events : null);
+        results.attach(connection.open(new Source(0, 0, List.of(), 0), true, results.listener()));
+
+        int taken = 0;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (taken < total && System.nanoTime() < deadline) {
+            Thread.sleep(5); // a consumer slower than the server
+            if (results.nextIfAvailable() != null) {
+                taken++;
+            }
+            if (taken == 10) {
+                // The stream is held back, the connection is not.
+                assertThat(await(connection.request(new GetHead(0)))).isEqualTo(new Head(1));
+            }
+        }
+        assertThat(taken).as("every frame arrives, in the end").isEqualTo(total);
+        assertThat(results.getError()).as("a slow consumer is not failed").isEmpty();
+        assertThat(results.isCompleted()).isTrue();
+        assertThat(connection.isClosed()).isFalse();
+        assertThat(deepestLead.get())
+                .as("the server never got further ahead than the window, plus the frame that overdraws it")
+                .isLessThanOrEqualTo(window + size);
     }
 
     private static StoredRecord record(long position) {

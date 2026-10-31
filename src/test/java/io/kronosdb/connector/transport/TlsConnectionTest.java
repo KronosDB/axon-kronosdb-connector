@@ -86,7 +86,7 @@ class TlsConnectionTest {
     private static ConnectOptions options(FakeServer server, String host, File trust) throws Exception {
         return new ConnectOptions(host, server.port(), "t", "c", null,
                 trust == null ? javax.net.ssl.SSLContext.getDefault() : KronosDbConnectionFactory.trusting(trust),
-                5000, 0, 0, 0);
+                5000, 0, 0, 0, ConnectOptions.DEFAULT_WINDOW);
     }
 
     @Test
@@ -135,7 +135,7 @@ class TlsConnectionTest {
     void aPlaintextClientCannotTalkToATlsServer() throws Exception {
         try (FakeServer server = tlsServer(matching);
              Transport transport = new Transport(new ConnectOptions("localhost", server.port(), "t", "c", null,
-                     null, 1000, 0, 0, 0))) {
+                     null, 1000, 0, 0, 0, ConnectOptions.DEFAULT_WINDOW))) {
             assertThatThrownBy(transport::connection).isInstanceOf(ConnectionClosedException.class);
         }
     }

@@ -32,7 +32,7 @@ public class SubscriptionQueryResponseMessageStream implements MessageStream<Que
     private volatile boolean terminated;
     private volatile @Nullable Throwable terminalError;
 
-    // Update flow control: refill the server-side credit in batches as updates are consumed.
+    // Update flow control: grant the handler more update permits in batches as updates are consumed.
     private final long refillBatch;
     private final AtomicLong consumedSinceRefill = new AtomicLong(0);
 

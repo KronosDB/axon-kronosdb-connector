@@ -5,12 +5,12 @@ import io.kronosdb.protocol.Command;
 import io.kronosdb.protocol.CommandHandled;
 import io.kronosdb.protocol.CommandResponse;
 import io.kronosdb.protocol.CommandResult;
-import io.kronosdb.protocol.Credit;
 import io.kronosdb.protocol.DispatchCommand;
 import io.kronosdb.protocol.ErrorDetail;
 import io.kronosdb.protocol.Frame;
 import io.kronosdb.protocol.HandleCommand;
 import io.kronosdb.protocol.OpenCommandHandlers;
+import io.kronosdb.protocol.Permits;
 import io.kronosdb.protocol.ServerAck;
 import io.kronosdb.protocol.SubscribeCommand;
 import io.kronosdb.protocol.UnsubscribeCommand;
@@ -167,7 +167,7 @@ public class CommandChannel {
     }
 
     private void grantPermits(long permits) {
-        sendToStream(new Credit(permits));
+        sendToStream(new Permits(permits));
     }
 
     /**

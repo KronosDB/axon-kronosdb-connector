@@ -52,7 +52,8 @@ public class KronosDbConnectionFactory {
                 builder.connectTimeoutMillis,
                 builder.keepAliveTimeMillis,
                 builder.keepAliveTimeoutMillis,
-                builder.maxFrame));
+                builder.maxFrame,
+                builder.window));
     }
 
     /**
@@ -135,6 +136,7 @@ public class KronosDbConnectionFactory {
         private long keepAliveTimeMillis = 10_000;   // 10s ping interval, conventional for long-lived streams
         private long keepAliveTimeoutMillis = 5_000;
         private int maxFrame = 0;
+        private int window = ConnectOptions.DEFAULT_WINDOW;
 
         Builder(String componentName, String clientId) {
             this.componentName = Objects.requireNonNull(componentName);
@@ -216,6 +218,22 @@ public class KronosDbConnectionFactory {
          */
         public Builder maxInboundMessageSize(int size) {
             this.maxFrame = size;
+            return this;
+        }
+
+        /**
+         * Each stream's window: the bytes of frames the server may send on a
+         * stream ahead of the consumer reading it. A consumer that falls behind
+         * holds back its own stream, never the others, and is never failed for
+         * it; a bigger window fills a link that is further away. At least 64 KiB;
+         * the default is 8 MiB.
+         */
+        public Builder streamWindow(int bytes) {
+            if (bytes < ConnectOptions.MIN_WINDOW) {
+                throw new IllegalArgumentException("the stream window must be at least "
+                        + ConnectOptions.MIN_WINDOW + " bytes, not " + bytes);
+            }
+            this.window = bytes;
             return this;
         }
 

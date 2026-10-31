@@ -1,7 +1,7 @@
 package io.kronosdb.connector.transport;
 
 import io.kronosdb.protocol.CancelQuery;
-import io.kronosdb.protocol.Credit;
+import io.kronosdb.protocol.Permits;
 import io.kronosdb.protocol.ErrorCode;
 import io.kronosdb.protocol.ErrorDetail;
 import io.kronosdb.protocol.Frame;
@@ -273,7 +273,7 @@ class QueriesNativeServerTest {
                     }
                 });
         stream.send(new SubscribeQuery("s-1", name, "text"));
-        stream.send(new Credit(10));
+        stream.send(new Permits(10));
         QueryChannel dispatcher = channel(transport(unique("dispatcher")));
 
         ResultStream<QueryResult> results = null;
