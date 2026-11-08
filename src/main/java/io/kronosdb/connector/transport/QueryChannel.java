@@ -3,13 +3,13 @@ package io.kronosdb.connector.transport;
 import io.kronosdb.protocol.Ack;
 import io.kronosdb.protocol.CancelQuery;
 import io.kronosdb.protocol.CancelSubscriptionQuery;
-import io.kronosdb.protocol.Credit;
 import io.kronosdb.protocol.DispatchQuery;
 import io.kronosdb.protocol.Frame;
 import io.kronosdb.protocol.HandleQuery;
 import io.kronosdb.protocol.HandleSubscriptionQuery;
 import io.kronosdb.protocol.OpenQueryHandlers;
 import io.kronosdb.protocol.OpenSubscriptionQuery;
+import io.kronosdb.protocol.Permits;
 import io.kronosdb.protocol.Query;
 import io.kronosdb.protocol.QueryDone;
 import io.kronosdb.protocol.QueryHandled;
@@ -81,7 +81,7 @@ public class QueryChannel {
     private final Map<String, Registration> subscriptionQueryRegistrations = new ConcurrentHashMap<>();
 
     // The update senders of those subscription queries, which hold updates back until the
-    // subscriber has granted credits for them.
+    // subscriber has granted permits for them.
     private final Map<String, UpdateSender> updateSenders = new ConcurrentHashMap<>();
 
     // Queries the server asked to stop, by request id, so a handler can notice.
@@ -196,7 +196,7 @@ public class QueryChannel {
     }
 
     private void grantPermits(long permits) {
-        sendToStream(new Credit(permits));
+        sendToStream(new Permits(permits));
     }
 
     /**
@@ -255,7 +255,7 @@ public class QueryChannel {
                 }
                 case ServerAck ack -> handleAck(ack.ack());
                 case HandleSubscriptionQuery handle -> {
-                    // Registered here, in the order the frames arrive, so credits that follow find it.
+                    // Registered here, in the order the frames arrive, so permits that follow find it.
                     SubscriptionQuery subscription = handle.subscription();
                     UpdateSender sender = new UpdateSender(subscription.subscriptionId(), subscription.permits());
                     updateSenders.put(subscription.subscriptionId(), sender);
@@ -434,10 +434,10 @@ public class QueryChannel {
     }
 
     /**
-     * Sends subscription query updates back through the handler stream, within the credits the
-     * subscriber has granted. The server drops an update the subscriber has no credit for, so
+     * Sends subscription query updates back through the handler stream, within the permits the
+     * subscriber has granted. The server drops an update the subscriber has no permit for, so
      * updates beyond them wait here, in order, until a {@code SubscriptionQueryPermits} frame
-     * lets them go. A completion bypasses credits but still follows the updates before it.
+     * lets them go. A completion bypasses permits but still follows the updates before it.
      */
     private class UpdateSender implements SubscriptionUpdateSender {
 
@@ -596,7 +596,7 @@ public class QueryChannel {
                 return;
             }
             try {
-                stream.send(new Credit(permits));
+                stream.send(new Permits(permits));
             } catch (RuntimeException e) {
                 // Stream already finished (server closed or errored) — safe to ignore.
             }

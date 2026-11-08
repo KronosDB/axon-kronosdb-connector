@@ -14,14 +14,20 @@ import java.util.function.Function;
  * non-blocking polling and callback-based notification when new items arrive.
  *
  * <p>Frames are queued as they arrive, so the stream never makes the
- * connection wait for a slow consumer; subscriptions bound what the server
- * sends ahead with credits (see {@link FlowControlledResultStream}).
+ * connection wait for a slow consumer. What the server sends ahead of the
+ * consumer is bounded by the stream's window, which the stream grants back as
+ * elements are taken from it: a slow consumer slows its own stream, is never
+ * failed for it, and holds nothing else up.
  *
  * @param <T> the type of elements in this stream
  */
 public class ResultStream<T> implements AutoCloseable {
 
-    private final BlockingQueue<T> queue = new LinkedBlockingQueue<>();
+    /** An element with what the window counts for it, granted back when it is taken. */
+    private record Queued<T>(T item, int size, StreamWindow window) {
+    }
+
+    private final BlockingQueue<Queued<T>> queue = new LinkedBlockingQueue<>();
     private final Function<Frame, T> mapper;
     private final StreamListener listener = new Listener();
 
@@ -61,12 +67,15 @@ public class ResultStream<T> implements AutoCloseable {
         return stream;
     }
 
-    private final class Listener implements StreamListener {
+    private final class Listener implements StreamListener.Paced {
         @Override
-        public void onFrame(Frame frame, boolean last) {
+        public void onFrame(Frame frame, boolean last, int size, StreamWindow window) {
             T item = mapper.apply(frame);
             if (item != null) {
-                queue.add(item);
+                queue.add(new Queued<>(item, size, window));
+            } else if (size > 0) {
+                // A frame that carries nothing for the consumer is taken at once.
+                window.consumed(size);
             }
             if (last) {
                 completed = true;
@@ -94,7 +103,7 @@ public class ResultStream<T> implements AutoCloseable {
      */
     @Nullable
     public T nextIfAvailable() {
-        return queue.poll();
+        return taken(queue.poll());
     }
 
     /**
@@ -102,7 +111,15 @@ public class ResultStream<T> implements AutoCloseable {
      */
     @Nullable
     public T nextIfAvailable(long timeout, TimeUnit unit) throws InterruptedException {
-        return queue.poll(timeout, unit);
+        return taken(queue.poll(timeout, unit));
+    }
+
+    private @Nullable T taken(@Nullable Queued<T> queued) {
+        if (queued == null) {
+            return null;
+        }
+        queued.window().consumed(queued.size());
+        return queued.item();
     }
 
     /**
@@ -110,7 +127,8 @@ public class ResultStream<T> implements AutoCloseable {
      */
     @Nullable
     public T peek() {
-        return queue.peek();
+        Queued<T> queued = queue.peek();
+        return queued == null ? null : queued.item();
     }
 
     /**

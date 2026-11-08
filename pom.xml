@@ -6,13 +6,13 @@
 
     <groupId>io.kronosdb</groupId>
     <artifactId>axon-kronosdb-connector</artifactId>
-    <version>0.6.0</version>
+    <version>0.7.0</version>
     <packaging>jar</packaging>
 
     <name>Axon KronosDB Connector</name>
     <description>
         Connector module providing Axon Framework 5 infrastructure components
-        that connect to KronosDB 0.11+ over its native protocol, as an alternative to Axon Server.
+        that connect to KronosDB over its native protocol, version 2, as an alternative to Axon Server.
     </description>
     <url>https://github.com/KronosDB/axon-kronosdb-connector</url>
 

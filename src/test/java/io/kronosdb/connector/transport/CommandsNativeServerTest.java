@@ -2,7 +2,7 @@ package io.kronosdb.connector.transport;
 
 import io.kronosdb.protocol.Command;
 import io.kronosdb.protocol.CommandResult;
-import io.kronosdb.protocol.Credit;
+import io.kronosdb.protocol.Permits;
 import io.kronosdb.protocol.ErrorCode;
 import io.kronosdb.protocol.ErrorDetail;
 import io.kronosdb.protocol.MessageMetadata;
@@ -414,7 +414,7 @@ class CommandsNativeServerTest {
                     }
                 });
         old.send(new SubscribeCommand("s-1", name, 100));
-        old.send(new Credit(10));
+        old.send(new Permits(10));
 
         Transport fresh = transport(unique("fresh"));
         await(channel(fresh).registerCommandHandler(

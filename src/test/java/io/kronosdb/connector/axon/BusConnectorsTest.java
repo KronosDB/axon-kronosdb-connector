@@ -10,7 +10,7 @@ import io.kronosdb.protocol.Ack;
 import io.kronosdb.protocol.CommandHandled;
 import io.kronosdb.protocol.CommandResponse;
 import io.kronosdb.protocol.CommandResult;
-import io.kronosdb.protocol.Credit;
+import io.kronosdb.protocol.Permits;
 import io.kronosdb.protocol.DispatchCommand;
 import io.kronosdb.protocol.DispatchQuery;
 import io.kronosdb.protocol.ErrorDetail;
@@ -191,7 +191,7 @@ class BusConnectorsTest {
         CompletableFuture<CommandHandled> handled = new CompletableFuture<>();
         KronosDbConnection connection = connection(session -> {
             FakeServer.Session.Incoming open = session.next(OpenCommandHandlers.class);
-            session.next(Credit.class);
+            session.next(Permits.class);
             SubscribeCommand subscribe = (SubscribeCommand) session.next(SubscribeCommand.class).frame();
             session.send(open.stream(), 0, new ServerAck(new Ack(subscribe.instructionId(), true, null)));
             session.send(open.stream(), 0, new HandleCommand(new io.kronosdb.protocol.Command(
@@ -277,7 +277,7 @@ class BusConnectorsTest {
         CompletableFuture<Void> done = new CompletableFuture<>();
         KronosDbConnection connection = connection(session -> {
             FakeServer.Session.Incoming open = session.next(OpenQueryHandlers.class);
-            session.next(Credit.class);
+            session.next(Permits.class);
             SubscribeQuery subscribe = (SubscribeQuery) session.next(SubscribeQuery.class).frame();
             sent.add(subscribe);
             session.send(open.stream(), 0, new ServerAck(new Ack(subscribe.instructionId(), true, null)));

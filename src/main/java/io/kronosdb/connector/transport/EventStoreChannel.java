@@ -40,9 +40,6 @@ import java.util.function.Function;
  */
 public class EventStoreChannel {
 
-    /** Default number of credits to grant initially and on each refill. */
-    private static final long DEFAULT_CREDITS = 500;
-
     private final Transport transport;
     private final String context;
 
@@ -105,31 +102,31 @@ public class EventStoreChannel {
     }
 
     /**
-     * Streams events matching the given criteria (infinite live-tailing stream)
-     * with credit-based flow control.
+     * Streams events matching the given criteria (infinite live-tailing stream).
      *
-     * <p>Opens a subscription with initial credits, then automatically grants
-     * more credits as events are consumed to keep the pipeline full.</p>
+     * <p>The server sends events as they become durable, as far as the
+     * stream's window allows: it stays at most a window ahead of what is taken
+     * from the returned stream, so a consumer that falls behind slows only
+     * this stream. Batches hold as many events as the server chooses.</p>
      *
      * @param fromSequence the first position to read
      * @param criteria     criteria to filter events (may be empty for all events)
      */
     public ResultStream<Events> stream(long fromSequence, List<Criterion> criteria) {
-        return stream(fromSequence, criteria, DEFAULT_CREDITS);
+        return stream(fromSequence, criteria, 0);
     }
 
     /**
-     * Streams events with an explicit credit batch size.
+     * Streams events with an explicit most number of events per batch; 0 lets
+     * the server choose.
      */
-    public ResultStream<Events> stream(long fromSequence, List<Criterion> criteria, long creditBatchSize) {
-        // Credits count events: a batch costs its event count, progress costs nothing.
-        FlowControlledResultStream<Events> results = new FlowControlledResultStream<>(
-                EventStoreChannel::events, creditBatchSize, batch -> batch.events().size());
-        // batch_size 0 lets the server pick its default; it never sends more
-        // unconsumed events than granted credits, so the effective cap is the credit budget.
+    public ResultStream<Events> stream(long fromSequence, List<Criterion> criteria, long batchSize) {
+        ResultStream<Events> results = new ResultStream<>(EventStoreChannel::events);
+        // The request ends the client's side: nothing more is sent in a subscription,
+        // only Window grants and a Cancel about it.
         open(results, (connection, id) -> connection.open(
-                new Subscribe(id, fromSequence, criteria, List.of(), creditBatchSize, 0, 0),
-                false,
+                new Subscribe(id, fromSequence, criteria, List.of(), batchSize, 0),
+                true,
                 results.listener()));
         return results;
     }

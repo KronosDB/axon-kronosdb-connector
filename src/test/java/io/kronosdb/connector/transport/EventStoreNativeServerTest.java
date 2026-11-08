@@ -55,7 +55,7 @@ class EventStoreNativeServerTest {
         int colon = ADDRESS.lastIndexOf(':');
         transport = new Transport(new ConnectOptions(ADDRESS.substring(0, colon),
                 Integer.parseInt(ADDRESS.substring(colon + 1)), "event-store-test", UUID.randomUUID().toString(),
-                null, null, 5000, 10_000, 5000, 0));
+                null, null, 5000, 10_000, 5000, 0, ConnectOptions.DEFAULT_WINDOW));
         store = new EventStoreChannel(transport, "default");
     }
 
@@ -166,10 +166,9 @@ class EventStoreNativeServerTest {
     }
 
     @Test
-    void aSubscriptionDeliversNewEventsAndRefillsItsCredits() throws Exception {
+    void aSubscriptionDeliversNewEventsInBatchesOfTheRequestedSize() throws Exception {
         String tag = UUID.randomUUID().toString();
         long from = await(store.head());
-        // Few credits and many events: the stream only keeps going if credits are granted back.
         ResultStream<Events> live = store.stream(from, List.of(tagged(tag)), 50);
         try {
             int batches = 6;
@@ -193,6 +192,7 @@ class EventStoreNativeServerTest {
                             .isLessThan(deadline);
                     continue;
                 }
+                assertThat(batch.events()).as("batch_size bounds the events per frame").hasSizeLessThanOrEqualTo(50);
                 for (StoredRecord r : batch.events()) {
                     assertThat(text(r.event().payload())).isEqualTo(String.valueOf(seen));
                     assertThat(r.event().position()).isGreaterThan(lastPosition);
@@ -202,6 +202,46 @@ class EventStoreNativeServerTest {
             }
         } finally {
             live.close();
+        }
+    }
+
+    @Test
+    void aSlowConsumerOfASubscriptionIsPacedByAWindowFarSmallerThanTheBacklog() throws Exception {
+        String tag = UUID.randomUUID().toString();
+        int events = 1500;
+        List<StoredRecord> batch = new ArrayList<>();
+        for (int i = 0; i < events; i++) {
+            batch.add(event("Bulk", tag, "x".repeat(2000)));
+        }
+        await(store.append(null, batch));
+        // About 3 MB of events behind a 64 KiB window: the server can only be a window ahead.
+        try (Transport small = new Transport(new ConnectOptions(ADDRESS.substring(0, ADDRESS.lastIndexOf(':')),
+                Integer.parseInt(ADDRESS.substring(ADDRESS.lastIndexOf(':') + 1)), "window-test",
+                UUID.randomUUID().toString(), null, null, 5000, 10_000, 5000, 0, ConnectOptions.MIN_WINDOW))) {
+            EventStoreChannel channel = new EventStoreChannel(small, "default");
+            for (boolean live : new boolean[]{false, true}) {
+                ResultStream<Events> stream = live
+                        ? channel.stream(0, List.of(tagged(tag)))
+                        : channel.source(0, List.of(tagged(tag)));
+                try {
+                    int seen = 0;
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+                    while (seen < events) {
+                        Events next = stream.nextIfAvailable(500, TimeUnit.MILLISECONDS);
+                        assertThat(stream.getError()).as("a slow consumer is not failed").isEmpty();
+                        assertThat(System.nanoTime()).as("stalled after %d of %d events", seen, events)
+                                .isLessThan(deadline);
+                        if (next != null) {
+                            seen += next.events().size();
+                            Thread.sleep(2);
+                        }
+                    }
+                    assertThat(seen).isEqualTo(events);
+                } finally {
+                    stream.close();
+                }
+            }
+            assertThat(await(channel.head())).isPositive();
         }
     }
 

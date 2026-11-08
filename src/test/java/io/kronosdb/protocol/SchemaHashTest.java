@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test;
 class SchemaHashTest {
 
     /** CRC32C of {@code protocol/kronosdb.schema}, as printed by {@code scripts/vendor-protocol.sh}. */
-    private static final String PINNED_SCHEMA_HASH = "a65e0eff";
+    private static final String PINNED_SCHEMA_HASH = "d1c0db3f";
 
     private static final Path SCHEMA = Path.of(System.getProperty("schema.file", "protocol/kronosdb.schema"));
 

@@ -11,10 +11,10 @@ public final class Frames {
     }
 
     /** The protocol version this code speaks. */
-    public static final int PROTOCOL_VERSION = 1;
+    public static final int PROTOCOL_VERSION = 2;
 
     /** CRC32C of the schema source, for checking generated code is in sync. */
-    public static final String SCHEMA_HASH = "a65e0eff";
+    public static final String SCHEMA_HASH = "d1c0db3f";
 
     /** Bytes every connection starts with, before the client's Hello. Do not modify. */
     public static final byte[] PREFACE = "KRONOSDB".getBytes(StandardCharsets.US_ASCII);
@@ -83,6 +83,8 @@ public final class Frames {
             case 0x8005 -> ContextBound.decode(r);
             case 0x8006 -> GoAway.decode(r);
             case 0x0006 -> Cancel.decode(r);
+            case 0x0009 -> Window.decode(r);
+            case 0x000a -> Permits.decode(r);
             case 0x8007 -> RequestFailed.decode(r);
             case 0x0100 -> Append.decode(r);
             case 0x8100 -> Appended.decode(r);
@@ -90,7 +92,6 @@ public final class Frames {
             case 0x0101 -> Source.decode(r);
             case 0x8102 -> Events.decode(r);
             case 0x0102 -> Subscribe.decode(r);
-            case 0x0103 -> Credit.decode(r);
             case 0x8103 -> Progress.decode(r);
             case 0x0104 -> GetHead.decode(r);
             case 0x8104 -> Head.decode(r);
@@ -168,6 +169,7 @@ public final class Frames {
             case 0x9103 -> TailWatermark.decode(r);
             case 0x9104 -> TailNeedSnapshot.decode(r);
             case 0x9105 -> TailTruncate.decode(r);
+            case 0x910a -> TailNeedArchive.decode(r);
             case 0x1102 -> ForwardAppend.decode(r);
             case 0x9106 -> ForwardAppended.decode(r);
             case 0x9107 -> ForwardAppendConflict.decode(r);

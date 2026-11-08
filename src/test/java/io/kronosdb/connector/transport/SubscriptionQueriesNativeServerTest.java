@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Subscription queries through {@link QueryChannel} against a real KronosDB
  * server: the initial result, updates, completion, cancelling from either end,
- * and the subscriber's update credits. See {@link RealServer} for how to run
+ * and the subscriber's update permits. See {@link RealServer} for how to run
  * these.
  */
 class SubscriptionQueriesNativeServerTest {
@@ -162,7 +162,7 @@ class SubscriptionQueriesNativeServerTest {
     }
 
     @Test
-    void theHandlerReceivesTheSubscriptionItsQueryAndTheSubscribersCreditWindow() throws Exception {
+    void theHandlerReceivesTheSubscriptionItsQueryAndTheSubscribersUpdatePermits() throws Exception {
         String name = unique("Watch");
         Watching handler = watcher(name);
         QueryChannel subscriber = new QueryChannel(transport(unique("subscriber")), "default", null);
@@ -257,10 +257,10 @@ class SubscriptionQueriesNativeServerTest {
         eventually("the stream ends", 10, () -> result.results().isCompleted());
     }
 
-    // ------------------------------------------------------- update credits
+    // ------------------------------------------------------- update permits
 
     @Test
-    void updatesWithinTheSubscribersCreditsAllArriveAndMoreArriveWhenItGrantsMore() throws Exception {
+    void updatesWithinTheSubscribersPermitsAllArriveAndMoreArriveWhenItGrantsMore() throws Exception {
         String name = unique("Watch");
         Watching handler = watcher(name);
         QueryChannel subscriber = new QueryChannel(transport(unique("subscriber")), "default", null);
@@ -302,7 +302,7 @@ class SubscriptionQueriesNativeServerTest {
         assertThat(next(result)).isInstanceOf(SubscriptionEvent.OfInitialResult.class);
 
         // Five times the window, emitted at once. The subscriber tops its
-        // credits up as it consumes, one at a time here.
+        // permits up as it consumes, one at a time here.
         int total = 20;
         for (int i = 0; i < total; i++) {
             sender.sendUpdate(update("u" + i));
