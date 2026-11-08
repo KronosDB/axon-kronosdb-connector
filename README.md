@@ -199,7 +199,7 @@ The wire format is generated in the KronosDB repository from `protocol/kronosdb.
 | `protocol/fixtures/` | The golden frames and their canonical JSON |
 | `src/test/java/io/kronosdb/protocol/` | `ConformanceTest` (every fixture decodes and re-encodes byte for byte), its JSON bridge, and `SchemaHashTest` |
 
-`scripts/vendor-protocol.sh <path to a KronosDB checkout>` refreshes all of it. It prints the new `SCHEMA_HASH`; pin that in `SchemaHashTest.PINNED_SCHEMA_HASH`. That one-line change is the review point for "the wire changed", and the conformance suite proves the new codec matches the new fixtures. Vendored with schema hash `56aaeb68`, native protocol version 2.
+`scripts/vendor-protocol.sh <path to a KronosDB checkout>` refreshes all of it. It prints the new `SCHEMA_HASH`; pin that in `SchemaHashTest.PINNED_SCHEMA_HASH`. That one-line change is the review point for "the wire changed", and the conformance suite proves the new codec matches the new fixtures. Vendored with schema hash `d1c0db3f`, native protocol version 2.
 
 ## License
 
