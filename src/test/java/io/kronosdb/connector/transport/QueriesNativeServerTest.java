@@ -218,14 +218,14 @@ class QueriesNativeServerTest {
     }
 
     @Test
-    void aQueryNobodyHandlesFailsAsUnavailable() throws Exception {
+    void aQueryNobodyHandlesFailsWithNoHandler() throws Exception {
         QueryChannel dispatcher = channel(transport(unique("dispatcher")));
         ResultStream<QueryResult> results = dispatcher.query(query(unique("Nobody"), "?"));
 
         eventually("the query fails", 10, results::isCompleted);
         assertThat(results.getError()).hasValueSatisfying(error -> assertThat(error)
                 .isInstanceOfSatisfying(RequestFailedException.class,
-                        e -> assertThat(e.code()).isEqualTo(ErrorCode.UNAVAILABLE)));
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.NO_HANDLER)));
     }
 
     @Test
@@ -249,7 +249,7 @@ class QueriesNativeServerTest {
             }
             return results.getError().filter(RequestFailedException.class::isInstance)
                     .map(RequestFailedException.class::cast)
-                    .filter(e -> e.code() == ErrorCode.UNAVAILABLE).isPresent();
+                    .filter(e -> e.code() == ErrorCode.NO_HANDLER).isPresent();
         });
     }
 

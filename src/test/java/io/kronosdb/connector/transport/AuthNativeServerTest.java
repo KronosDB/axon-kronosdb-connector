@@ -137,7 +137,7 @@ class AuthNativeServerTest {
         RealServer.eventually("the query is answered", 10, results::isCompleted);
         assertThat(results.getError()).hasValueSatisfying(error -> assertThat(error)
                 .isInstanceOfSatisfying(RequestFailedException.class,
-                        e -> assertThat(e.code()).isEqualTo(ErrorCode.UNAVAILABLE)));
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.NO_HANDLER)));
     }
 
     @Test
@@ -146,7 +146,7 @@ class AuthNativeServerTest {
 
         assertThat(await(new EventStoreChannel(writer, "default").append(null, List.of(event())))).isNotNull();
         // Nobody handles it, but the dispatch itself is allowed.
-        assertFailsWith(ErrorCode.UNAVAILABLE,
+        assertFailsWith(ErrorCode.NO_HANDLER,
                 () -> new CommandChannel(writer, "default", null).sendCommand(command(unique("Any"), "x")).get());
     }
 }

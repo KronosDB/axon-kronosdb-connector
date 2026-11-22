@@ -106,7 +106,7 @@ class BusConnectorsServerTest {
                 return connector.dispatch(command, null).get(15, TimeUnit.SECONDS);
             } catch (ExecutionException e) {
                 if (e.getCause() instanceof io.kronosdb.connector.transport.RequestFailedException failed
-                        && failed.code() == io.kronosdb.protocol.ErrorCode.UNAVAILABLE) {
+                        && failed.code() == io.kronosdb.protocol.ErrorCode.NO_HANDLER) {
                     Thread.sleep(50);
                     continue;
                 }
@@ -176,14 +176,14 @@ class BusConnectorsServerTest {
     }
 
     @Test
-    void aCommandWithoutAHandlerFailsAsUnavailable() {
+    void aCommandWithoutAHandlerFailsWithNoHandler() {
         KronosDbCommandBusConnector dispatcher = new Instance().commands();
 
         assertThatThrownBy(() -> dispatcher.dispatch(command(unique("Nobody"), "x"), null).get(15, TimeUnit.SECONDS))
                 .isInstanceOf(ExecutionException.class)
                 .cause()
                 .isInstanceOfSatisfying(io.kronosdb.connector.transport.RequestFailedException.class,
-                        e -> assertThat(e.code()).isEqualTo(io.kronosdb.protocol.ErrorCode.UNAVAILABLE));
+                        e -> assertThat(e.code()).isEqualTo(io.kronosdb.protocol.ErrorCode.NO_HANDLER));
     }
 
     @Test

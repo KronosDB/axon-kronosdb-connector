@@ -195,14 +195,14 @@ class SubscriptionQueriesNativeServerTest {
     }
 
     @Test
-    void aSubscriptionNobodyServesFailsAsUnavailable() throws Exception {
+    void aSubscriptionNobodyServesFailsWithNoHandler() throws Exception {
         QueryChannel subscriber = new QueryChannel(transport(unique("subscriber")), "default", null);
         QueryChannel.SubscriptionQueryResult result = subscriber.subscriptionQuery(query(unique("Nobody"), "q"), 8);
 
         eventually("the subscription fails", 10, () -> result.results().isCompleted());
         assertThat(result.results().getError()).hasValueSatisfying(error -> assertThat(error)
                 .isInstanceOfSatisfying(RequestFailedException.class,
-                        e -> assertThat(e.code()).isEqualTo(ErrorCode.UNAVAILABLE)));
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.NO_HANDLER)));
     }
 
     // ------------------------------------------------------------ cancel
