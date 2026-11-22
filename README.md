@@ -28,7 +28,7 @@ Public builds come from [JitPack](https://jitpack.io), built from this repositor
     <dependency>
         <groupId>com.github.KronosDB</groupId>
         <artifactId>axon-kronosdb-connector</artifactId>
-        <version>v0.7.0</version>
+        <version>v0.8.0</version>
     </dependency>
     <dependency>
         <groupId>org.axonframework</groupId>
@@ -51,7 +51,7 @@ repositories {
 }
 
 dependencies {
-    implementation("com.github.KronosDB:axon-kronosdb-connector:v0.7.0")
+    implementation("com.github.KronosDB:axon-kronosdb-connector:v0.8.0")
     implementation("org.axonframework:axon-messaging:5.4.1")
     implementation("org.axonframework:axon-eventsourcing:5.4.1")
 }
