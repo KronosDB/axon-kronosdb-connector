@@ -85,7 +85,7 @@ class CommandsNativeServerTest {
                 return await(dispatcher.sendCommand(command.apply(attempt)));
             } catch (java.util.concurrent.ExecutionException e) {
                 if (e.getCause() instanceof RequestFailedException failed
-                        && failed.code() == ErrorCode.UNAVAILABLE) {
+                        && failed.code() == ErrorCode.NO_HANDLER) {
                     Thread.sleep(50);
                     continue;
                 }
@@ -183,14 +183,14 @@ class CommandsNativeServerTest {
     }
 
     @Test
-    void aCommandNobodyHandlesFailsAsUnavailable() throws Exception {
+    void aCommandNobodyHandlesFailsWithNoHandler() throws Exception {
         CommandChannel dispatcher = channel(transport(unique("dispatcher")));
 
         assertThatThrownBy(() -> await(dispatcher.sendCommand(command(unique("Nobody"), "x"))))
                 .isInstanceOf(ExecutionException.class)
                 .cause()
                 .isInstanceOfSatisfying(RequestFailedException.class,
-                        e -> assertThat(e.code()).isEqualTo(ErrorCode.UNAVAILABLE));
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.NO_HANDLER));
     }
 
     @Test
@@ -310,7 +310,7 @@ class CommandsNativeServerTest {
                 return false;
             } catch (Exception e) {
                 return e.getCause() instanceof RequestFailedException failed
-                        && failed.code() == ErrorCode.UNAVAILABLE;
+                        && failed.code() == ErrorCode.NO_HANDLER;
             }
         });
         assertThat(await(dispatcher.sendCommand(command(kept, "x"))).errorCode()).isEmpty();

@@ -195,7 +195,7 @@ Tests name their commands, queries and tags uniquely, so they can share a server
 
 ### CI
 
-`.github/workflows/build.yml` runs `mvn verify` on JDK 21 for Axon 5.3.0, 5.3.3 and 5.4.1. The server tests run in a second job that starts the servers above from the `ghcr.io/kronosdb/kronosdb` images of the oldest supported release and the latest, 0.12.0 and 0.13.0; a manual dispatch can name another `kronosdb-image`.
+`.github/workflows/build.yml` runs `mvn verify` on JDK 21 for Axon 5.3.0, 5.3.3 and 5.4.1. The server tests run in a second job that starts the servers above from the `ghcr.io/kronosdb/kronosdb:0.16.0` image; a manual dispatch can name another `kronosdb-image`.
 
 ## The native protocol codec is vendored
 
@@ -208,7 +208,7 @@ The wire format is generated in the KronosDB repository from `protocol/kronosdb.
 | `protocol/fixtures/` | The golden frames and their canonical JSON |
 | `src/test/java/io/kronosdb/protocol/` | `ConformanceTest` (every fixture decodes and re-encodes byte for byte), its JSON bridge, and `SchemaHashTest` |
 
-`scripts/vendor-protocol.sh <path to a KronosDB checkout>` refreshes all of it. It prints the new `SCHEMA_HASH`; pin that in `SchemaHashTest.PINNED_SCHEMA_HASH`. That one-line change is the review point for "the wire changed", and the conformance suite proves the new codec matches the new fixtures. Vendored with schema hash `d1c0db3f`, native protocol version 2.
+`scripts/vendor-protocol.sh <path to a KronosDB checkout>` refreshes all of it. It prints the new `SCHEMA_HASH`; pin that in `SchemaHashTest.PINNED_SCHEMA_HASH`. That one-line change is the review point for "the wire changed", and the conformance suite proves the new codec matches the new fixtures. Vendored with schema hash `7cc1b9b4`, native protocol version 2.
 
 ## License
 
