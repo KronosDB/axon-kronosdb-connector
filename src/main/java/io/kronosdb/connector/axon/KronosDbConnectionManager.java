@@ -74,6 +74,7 @@ public class KronosDbConnectionManager {
         }
 
         factoryBuilder.streamWindow(configuration.getStreamWindow());
+        factoryBuilder.appendRetryTimeout(configuration.getAppendRetryTimeoutMillis());
 
         this.connectionFactory = factoryBuilder.build();
     }

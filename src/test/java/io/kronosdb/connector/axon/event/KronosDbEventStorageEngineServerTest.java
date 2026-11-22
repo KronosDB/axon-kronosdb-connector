@@ -3,6 +3,8 @@ package io.kronosdb.connector.axon.event;
 import io.kronosdb.connector.axon.snapshot.KronosDbSnapshotStore;
 import io.kronosdb.connector.transport.KronosDbConnection;
 import io.kronosdb.connector.transport.KronosDbConnectionFactory;
+import io.kronosdb.connector.transport.LostAnswerProxy;
+import io.kronosdb.connector.transport.RealServer;
 import org.axonframework.common.infra.ComponentDescriptor;
 import org.axonframework.conversion.Converter;
 import org.axonframework.eventsourcing.eventstore.AppendCondition;
@@ -163,6 +165,45 @@ class KronosDbEventStorageEngineServerTest {
         // The marker is just past the last event read, which is what the last token also is.
         assertThat(GlobalIndexConsistencyMarker.position(marker))
                 .isGreaterThanOrEqualTo(lastToken.position().getAsLong());
+    }
+
+    @Test
+    void aCommitWhoseAnswerIsLostWithTheConnectionWritesItsEventsOnce() throws Exception {
+        RealServer.requireRetrySafeAppends();
+        String tag = UUID.randomUUID().toString();
+        EventCriteria criteria = EventCriteria.havingTags(Tag.of("it", tag));
+        TaggedEventMessage<?> placed = event("OrderPlaced", tag, "one");
+        TaggedEventMessage<?> added = event("ItemAdded", tag, "two");
+        try (LostAnswerProxy proxy = new LostAnswerProxy(RealServer.host(), RealServer.port(),
+                LostAnswerProxy.Instead.A_CLOSED_CONNECTION)) {
+            KronosDbConnectionFactory throughProxy = KronosDbConnectionFactory
+                    .forClient("engine-test", UUID.randomUUID().toString())
+                    .host("127.0.0.1")
+                    .port(proxy.port())
+                    .build();
+            try {
+                EventStorageEngine losingTheAnswer = new KronosDbEventStorageEngine(
+                        throughProxy.connect("default"), new DelegatingEventConverter(PASS_THROUGH));
+
+                ConsistencyMarker marker = commit(losingTheAnswer
+                        .appendEvents(AppendCondition.none(), null, List.of(placed, added))
+                        .get(10, TimeUnit.SECONDS));
+
+                assertThat(proxy.appendedByTheServer()).as("the append reached the server twice").isEqualTo(2);
+                List<MessageStream.Entry<EventMessage>> written = read(engine.source(
+                        SourcingCondition.conditionFor(criteria)));
+                assertThat(written).hasSize(3);
+                assertThat(written.get(0).message().identifier()).isEqualTo(placed.event().identifier());
+                assertThat(written.get(1).message().identifier()).isEqualTo(added.event().identifier());
+                assertThat(written.get(2).message()).isSameAs(TerminalEventMessage.INSTANCE);
+                // The marker is just past the last event, as the last token is.
+                TrackingToken last = written.get(1).getResource(TrackingToken.RESOURCE_KEY);
+                assertThat(GlobalIndexConsistencyMarker.position(marker))
+                        .isGreaterThanOrEqualTo(last.position().getAsLong());
+            } finally {
+                throughProxy.shutdown();
+            }
+        }
     }
 
     @Test

@@ -44,8 +44,8 @@ public final class FakeServer implements AutoCloseable {
             this.out = socket.getOutputStream();
         }
 
-        /** What the client sent after the header, decoded. */
-        public record Incoming(int stream, int flags, Frame frame) {
+        /** What the client sent after the header, decoded, and the bytes it was decoded from. */
+        public record Incoming(int stream, int flags, Frame frame, byte[] body) {
             public boolean end() {
                 return (flags & Frames.FLAG_END) != 0;
             }
@@ -83,7 +83,7 @@ public final class FakeServer implements AutoCloseable {
             if (frame == null) {
                 throw new IOException("unknown kind " + Frames.kind(header, 0));
             }
-            return new Incoming(Frames.stream(header, 0), Frames.flags(header, 0), frame);
+            return new Incoming(Frames.stream(header, 0), Frames.flags(header, 0), frame, body);
         }
 
         /** The next frame of the given type, skipping connection frames (pings) the client may interleave. */

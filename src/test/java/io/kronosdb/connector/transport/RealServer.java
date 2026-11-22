@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * reach its admin API, and small builders for the messages they send.
  *
  * <p>The tests run when {@code -Dkronosdb.native.addr=host:port} names a
- * server, and are skipped otherwise. Two more properties unlock tests that
+ * server, and are skipped otherwise. Three more properties unlock tests that
  * need to know more about that server:
  *
  * <ul>
@@ -37,6 +37,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  *   <li>{@code -Dkronosdb.native.short-timeouts=true}: it was started with
  *       {@code --command-timeout 3 --query-timeout 3 --heartbeat-interval 1
  *       --heartbeat-timeout 4}, which the timeout tests rely on.</li>
+ *   <li>{@code -Dkronosdb.native.retry-safe-appends=true}: it recognises an append
+ *       that is sent again and answers with the positions the events already
+ *       have (KronosDB 0.17 or later), which the append retry tests rely on.</li>
  * </ul>
  *
  * Every test names its commands and queries uniquely, so tests share a server
@@ -47,6 +50,7 @@ public final class RealServer {
     public static final String ADDRESS = System.getProperty("kronosdb.native.addr");
     public static final String ADMIN = System.getProperty("kronosdb.native.admin");
     public static final boolean SHORT_TIMEOUTS = Boolean.getBoolean("kronosdb.native.short-timeouts");
+    public static final boolean RETRY_SAFE_APPENDS = Boolean.getBoolean("kronosdb.native.retry-safe-appends");
 
     private static final HttpClient HTTP = HttpClient.newHttpClient();
 
@@ -65,6 +69,12 @@ public final class RealServer {
     public static void requireShortTimeouts() {
         require();
         assumeTrue(SHORT_TIMEOUTS, "needs a server started with the short timeouts, see RealServer");
+    }
+
+    public static void requireRetrySafeAppends() {
+        require();
+        assumeTrue(RETRY_SAFE_APPENDS,
+                "needs a server that recognises an append sent again (KronosDB 0.17 or later), see RealServer");
     }
 
     public static String host() {
