@@ -1,5 +1,6 @@
 package io.kronosdb.connector.axon;
 
+import io.kronosdb.connector.ConnectorVersion;
 import io.kronosdb.connector.transport.KronosDbConnection;
 import io.kronosdb.connector.transport.KronosDbConnectionFactory;
 import io.kronosdb.protocol.ClientIdentity;
@@ -127,7 +128,7 @@ public class KronosDbConnectionManager {
         ClientIdentity identification = new ClientIdentity(
                 configuration.getClientId(),
                 configuration.getComponentName(),
-                "0.1.0",
+                ConnectorVersion.VERSION,
                 List.of());
 
         // Unary request to register client

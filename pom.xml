@@ -124,6 +124,17 @@
         <resources>
             <resource>
                 <directory>src/main/resources</directory>
+                <excludes>
+                    <exclude>io/kronosdb/connector/version.properties</exclude>
+                </excludes>
+            </resource>
+            <!-- The connector's own version, which it reports to the server -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <includes>
+                    <include>io/kronosdb/connector/version.properties</include>
+                </includes>
+                <filtering>true</filtering>
             </resource>
             <!-- The license and the attribution for the vendored Axon Framework code travel with the jar -->
             <resource>
