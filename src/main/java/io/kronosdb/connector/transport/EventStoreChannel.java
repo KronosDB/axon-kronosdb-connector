@@ -100,6 +100,9 @@ public class EventStoreChannel {
      * have. This goes on, with a growing wait in between, for the channel's
      * append retry time; after that the append fails with the last error.
      * Any other error fails the append at once, and so does a conflict.
+     * An append is sent again only to a server that said in its handshake
+     * that it recognises one (KronosDB 0.17 or later); to any other it is
+     * sent once, and fails with that server's error.
      * {@code events} must not change until the returned future completes.</p>
      *
      * @param condition the consistency condition, or {@code null} for none
@@ -118,6 +121,10 @@ public class EventStoreChannel {
         private final List<StoredRecord> events;
         private final long startedAt = System.nanoTime();
         private int sentAgain;
+        /** Why the append is being sent again; null the first time. */
+        private volatile @Nullable Throwable lastFailure;
+        /** The server that would get the append again does not recognise one. */
+        private volatile boolean notSentAgain;
 
         Appending(@Nullable Condition condition, List<StoredRecord> events) {
             this.condition = condition;
@@ -130,6 +137,12 @@ public class EventStoreChannel {
 
         @Override
         public CompletableFuture<Frame> apply(NativeConnection connection, int contextId) {
+            Throwable failure = lastFailure;
+            if (failure != null && !connection.retrySafeAppends()) {
+                // This server would write the events a second time.
+                notSentAgain = true;
+                return CompletableFuture.failedFuture(failure);
+            }
             return connection.request(new Append(contextId, condition, events));
         }
 
@@ -147,10 +160,11 @@ public class EventStoreChannel {
         }
 
         private void failed(Throwable cause) {
-            if (!outcomeUnknown(cause) || result.isDone()) {
+            if (notSentAgain || !outcomeUnknown(cause) || result.isDone()) {
                 result.completeExceptionally(cause);
                 return;
             }
+            lastFailure = cause;
             long elapsed = (System.nanoTime() - startedAt) / 1_000_000;
             long left = appendRetryMillis - elapsed;
             if (left <= 0) {

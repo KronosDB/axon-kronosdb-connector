@@ -61,10 +61,16 @@ public final class FakeServer implements AutoCloseable {
             return hello;
         }
 
-        /** Reads the preface and Hello and answers Welcome. */
+        /** Reads the preface and Hello and answers Welcome, granting retry-safe appends as a current server does. */
         public Hello handshake(long maxFrame, long heartbeatMillis) throws IOException {
+            return handshake(maxFrame, heartbeatMillis, 1);
+        }
+
+        /** Reads the preface and Hello and answers Welcome, granting those of {@code features} the client asked for. */
+        public Hello handshake(long maxFrame, long heartbeatMillis, long features) throws IOException {
             readHello();
-            send(0, 0, new Welcome(Frames.PROTOCOL_VERSION, 0, 3, "fake", "tester", maxFrame, heartbeatMillis));
+            send(0, 0, new Welcome(Frames.PROTOCOL_VERSION, hello.features() & features, 3, "fake", "tester",
+                    maxFrame, heartbeatMillis));
             return hello;
         }
 

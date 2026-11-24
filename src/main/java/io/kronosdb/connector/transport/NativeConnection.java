@@ -75,6 +75,8 @@ public final class NativeConnection implements AutoCloseable {
 
     /** The stored record layout this client decodes. */
     private static final int RECORD_FORMAT = 3;
+    /** Feature bit 0 of Hello and Welcome: appends that can be sent again. */
+    private static final long FEATURE_RETRY_SAFE_APPENDS = 1;
     /** Bound for frames before Welcome announces the real limit. */
     private static final int HANDSHAKE_MAX_FRAME = 16 * 1024 * 1024;
     /** Producers wait while this much is queued unsent. */
@@ -164,7 +166,7 @@ public final class NativeConnection implements AutoCloseable {
             hello.writeRaw(Frames.PREFACE, 0, Frames.PREFACE.length);
             Frames.encode(hello, 0, 0, new Hello(
                     Frames.PROTOCOL_VERSION,
-                    0,
+                    FEATURE_RETRY_SAFE_APPENDS,
                     RECORD_FORMAT,
                     options.clientName(),
                     options.clientId(),
@@ -221,6 +223,16 @@ public final class NativeConnection implements AutoCloseable {
 
     public Welcome welcome() {
         return welcome;
+    }
+
+    /**
+     * Whether the server recognises an append that is sent again and answers
+     * with the positions its events already have. A server that does not
+     * (one before KronosDB 0.17, or one with its retry window turned off)
+     * writes the events a second time.
+     */
+    public boolean retrySafeAppends() {
+        return (welcome.features() & FEATURE_RETRY_SAFE_APPENDS) != 0;
     }
 
     public boolean isClosed() {

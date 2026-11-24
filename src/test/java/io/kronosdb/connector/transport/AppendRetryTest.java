@@ -6,6 +6,7 @@ import io.kronosdb.protocol.Appended;
 import io.kronosdb.protocol.Condition;
 import io.kronosdb.protocol.Criterion;
 import io.kronosdb.protocol.ErrorCode;
+import io.kronosdb.protocol.Hello;
 import io.kronosdb.protocol.EventRecord;
 import io.kronosdb.protocol.Frame;
 import io.kronosdb.protocol.GetHead;
@@ -28,6 +29,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -96,6 +98,24 @@ class AppendRetryTest {
                         new RequestFailed(ErrorCode.UNAVAILABLE, "refused " + appends.incrementAndGet()));
             }
         });
+    }
+
+    /** A server that grants no feature, as one before KronosDB 0.17, and answers every append with {@code unavailable}. */
+    private FakeServer olderServer(AtomicInteger appends) throws IOException {
+        FakeServer server = new FakeServer(session -> {
+            try {
+                session.handshake(16 * 1024 * 1024, 10_000, 0);
+                while (true) {
+                    FakeServer.Session.Incoming append = session.next(Append.class);
+                    session.reply(append.stream(),
+                            new RequestFailed(ErrorCode.UNAVAILABLE, "refused " + appends.incrementAndGet()));
+                }
+            } catch (IOException ignored) {
+                // The client hung up.
+            }
+        });
+        closeables.add(server);
+        return server;
     }
 
     private static <T> T await(CompletableFuture<T> f) throws Exception {
@@ -299,6 +319,43 @@ class AppendRetryTest {
         Thread.sleep(300);
         assertThat(await(store.head())).isEqualTo(5);
         assertThat(afterwards).isEmpty();
+    }
+
+    @Test
+    void theHandshakeAsksForRetrySafeAppendsAndTheConnectionSaysWhetherTheyWereGranted() throws Exception {
+        AtomicReference<Hello> asked = new AtomicReference<>();
+        FakeServer granting = new FakeServer(session -> {
+            try {
+                asked.set(session.handshake());
+                session.next();
+            } catch (IOException ignored) {
+                // The client hung up.
+            }
+        });
+        closeables.add(granting);
+        FakeServer older = olderServer(new AtomicInteger());
+
+        assertThat(transport(granting.port()).connection().retrySafeAppends()).isTrue();
+        assertThat(asked.get().features()).isEqualTo(1);
+        assertThat(transport(older.port()).connection().retrySafeAppends()).isFalse();
+    }
+
+    @Test
+    void anAppendIsSentOnceToAServerThatDoesNotRecogniseOneSentAgain() throws Exception {
+        AtomicInteger appends = new AtomicInteger();
+        FakeServer server = olderServer(appends);
+        EventStoreChannel store = new EventStoreChannel(transport(server.port()), "default", 2000);
+
+        assertThatThrownBy(() -> await(store.append(null, events())))
+                .isInstanceOf(ExecutionException.class)
+                .cause()
+                .isInstanceOfSatisfying(RequestFailedException.class, e -> {
+                    assertThat(e.code()).isEqualTo(ErrorCode.UNAVAILABLE);
+                    assertThat(e).hasMessage("refused 1");
+                });
+
+        Thread.sleep(300);
+        assertThat(appends.get()).as("the server would write the events a second time").isEqualTo(1);
     }
 
     @Test
