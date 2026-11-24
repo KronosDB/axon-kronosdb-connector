@@ -23,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Channel abstraction for the KronosDB platform service of the native protocol.
@@ -36,7 +37,15 @@ public class PlatformChannel {
     private final Transport transport;
     private final String context;
 
-    private volatile @Nullable ClientStream platformStream;
+    /**
+     * Held while the stream is opened, and whenever it is read or cleared. The
+     * server can send on the stream, or end it, before {@code open} has handed
+     * it back; whoever acts on that waits here until the stream is in place.
+     */
+    private final ReentrantLock streamLock = new ReentrantLock();
+    private @Nullable ClientStream platformStream;
+    /** The stream being opened ended before {@code open} returned it. */
+    private boolean endedWhileOpening;
     private ScheduledExecutorService heartbeatExecutor;
     private volatile ClientIdentity lastIdentification;
     private volatile Runnable lastReconnectCallback;
@@ -97,7 +106,7 @@ public class PlatformChannel {
     private void openStreamInternal(ClientIdentity identification, Runnable onReconnectRequested) {
         NativeConnection connection = transport.connection();
         flaps.opened();
-        platformStream = connection.open(new OpenPlatform(identification), false, new StreamListener() {
+        StreamListener listener = new StreamListener() {
             @Override
             public void onFrame(Frame frame, boolean last) {
                 switch (frame) {
@@ -118,7 +127,7 @@ public class PlatformChannel {
                 }
                 if (last) {
                     logger.info("Platform stream completed for context [{}].", context);
-                    platformStream = null;
+                    clearStream();
                     streamEnded();
                     schedulePlatformReconnect();
                 }
@@ -127,11 +136,43 @@ public class PlatformChannel {
             @Override
             public void onFailure(Throwable cause) {
                 logger.warn("Platform stream error for context [{}]: {}.", context, cause.getMessage());
-                platformStream = null;
+                clearStream();
                 streamEnded();
                 schedulePlatformReconnect();
             }
-        });
+        };
+        streamLock.lock();
+        try {
+            endedWhileOpening = false;
+            ClientStream stream = connection.open(new OpenPlatform(identification), false, listener);
+            // A stream that failed inside open() is not one to keep.
+            platformStream = endedWhileOpening ? null : stream;
+        } finally {
+            streamLock.unlock();
+        }
+    }
+
+    /** The open stream, once any open in progress has put it in place. */
+    private @Nullable ClientStream stream() {
+        streamLock.lock();
+        try {
+            return platformStream;
+        } finally {
+            streamLock.unlock();
+        }
+    }
+
+    /** Forgets the stream and hands back the one that was there. */
+    private @Nullable ClientStream clearStream() {
+        streamLock.lock();
+        try {
+            ClientStream stream = platformStream;
+            platformStream = null;
+            endedWhileOpening = true;
+            return stream;
+        } finally {
+            streamLock.unlock();
+        }
     }
 
     private void streamEnded() {
@@ -146,7 +187,7 @@ public class PlatformChannel {
      * Thread-safe write to the platform stream.
      */
     private void sendToStream(Frame frame) {
-        ClientStream stream = platformStream;
+        ClientStream stream = stream();
         if (stream != null) {
             stream.send(frame);
         }
@@ -270,7 +311,7 @@ public class PlatformChannel {
                                 context, attempt, delay);
                         openStreamInternal(lastIdentification, lastReconnectCallback);
 
-                        if (platformStream == null) {
+                        if (stream() == null) {
                             logger.warn("Platform stream open returned but stream is null — retrying.");
                             continue;
                         }
@@ -280,7 +321,7 @@ public class PlatformChannel {
                     } catch (Exception e) {
                         logger.warn("Platform reconnect attempt {} failed for context [{}]: {}.",
                                 attempt, context, e.getMessage());
-                        platformStream = null;
+                        clearStream();
                     }
                 }
             } finally {
@@ -297,8 +338,7 @@ public class PlatformChannel {
         if (heartbeatExecutor != null) {
             heartbeatExecutor.shutdown();
         }
-        ClientStream stream = platformStream;
-        platformStream = null;
+        ClientStream stream = clearStream();
         if (stream != null) {
             stream.cancel();
         }

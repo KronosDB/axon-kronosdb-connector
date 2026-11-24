@@ -621,6 +621,54 @@ class MessagingChannelsTest {
     }
 
     @Test
+    void aHeartbeatTheServerSendsAsSoonAsTheStreamOpensIsAnswered() throws Exception {
+        // The server's first heartbeat can arrive before open() has handed the
+        // stream back to the channel. Its answer must still go out, every time.
+        // Many channels open at once, so that an opening thread is often set
+        // aside between sending the request and keeping the stream.
+        int openers = 4 * Runtime.getRuntime().availableProcessors();
+        int roundsEach = 50;
+        ClientIdentity identity = new ClientIdentity("client-1", "orders", "0.1.0", List.of());
+        AtomicInteger answered = new AtomicInteger();
+        Transport transport = transport(session -> {
+            while (true) {
+                FakeServer.Session.Incoming in = session.next();
+                switch (in.frame()) {
+                    case OpenPlatform ignored -> session.send(in.stream(), 0, new ServerHeartbeat());
+                    case PlatformHeartbeat ignored -> answered.incrementAndGet();
+                    default -> {
+                        // A stream the client cancels.
+                    }
+                }
+            }
+        });
+        transport.connection();
+
+        List<PlatformChannel> channels = new CopyOnWriteArrayList<>();
+        List<Thread> threads = new java.util.ArrayList<>();
+        for (int opener = 0; opener < openers; opener++) {
+            threads.add(Thread.ofPlatform().start(() -> {
+                for (int round = 0; round < roundsEach; round++) {
+                    PlatformChannel channel = new PlatformChannel(transport, "default");
+                    channels.add(channel);
+                    channel.openStream(identity, () -> { });
+                }
+            }));
+        }
+        for (Thread thread : threads) {
+            thread.join();
+        }
+        closeables.add(() -> channels.forEach(PlatformChannel::disconnect));
+
+        int opened = openers * roundsEach;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (answered.get() < opened && System.nanoTime() < deadline) {
+            Thread.sleep(5);
+        }
+        assertThat(answered.get()).as("heartbeats answered, of %d streams opened", opened).isEqualTo(opened);
+    }
+
+    @Test
     void periodicHeartbeatsGoOnThePlatformStream() throws Exception {
         AtomicInteger heartbeats = new AtomicInteger();
         Transport transport = transport(session -> {
