@@ -44,8 +44,8 @@ public final class FakeServer implements AutoCloseable {
             this.out = socket.getOutputStream();
         }
 
-        /** What the client sent after the header, decoded. */
-        public record Incoming(int stream, int flags, Frame frame) {
+        /** What the client sent after the header, decoded, and the bytes it was decoded from. */
+        public record Incoming(int stream, int flags, Frame frame, byte[] body) {
             public boolean end() {
                 return (flags & Frames.FLAG_END) != 0;
             }
@@ -61,10 +61,16 @@ public final class FakeServer implements AutoCloseable {
             return hello;
         }
 
-        /** Reads the preface and Hello and answers Welcome. */
+        /** Reads the preface and Hello and answers Welcome, granting retry-safe appends as a current server does. */
         public Hello handshake(long maxFrame, long heartbeatMillis) throws IOException {
+            return handshake(maxFrame, heartbeatMillis, 1);
+        }
+
+        /** Reads the preface and Hello and answers Welcome, granting those of {@code features} the client asked for. */
+        public Hello handshake(long maxFrame, long heartbeatMillis, long features) throws IOException {
             readHello();
-            send(0, 0, new Welcome(Frames.PROTOCOL_VERSION, 0, 3, "fake", "tester", maxFrame, heartbeatMillis));
+            send(0, 0, new Welcome(Frames.PROTOCOL_VERSION, hello.features() & features, 3, "fake", "tester",
+                    maxFrame, heartbeatMillis));
             return hello;
         }
 
@@ -83,7 +89,7 @@ public final class FakeServer implements AutoCloseable {
             if (frame == null) {
                 throw new IOException("unknown kind " + Frames.kind(header, 0));
             }
-            return new Incoming(Frames.stream(header, 0), Frames.flags(header, 0), frame);
+            return new Incoming(Frames.stream(header, 0), Frames.flags(header, 0), frame, body);
         }
 
         /** The next frame of the given type, skipping connection frames (pings) the client may interleave. */

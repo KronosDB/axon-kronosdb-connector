@@ -6,6 +6,7 @@ import io.kronosdb.protocol.AppendSnapshot;
 import io.kronosdb.protocol.Appended;
 import io.kronosdb.protocol.Condition;
 import io.kronosdb.protocol.Criterion;
+import io.kronosdb.protocol.ErrorCode;
 import io.kronosdb.protocol.Events;
 import io.kronosdb.protocol.Frame;
 import io.kronosdb.protocol.GetHead;
@@ -26,11 +27,14 @@ import io.kronosdb.protocol.Tag;
 import io.kronosdb.protocol.Tags;
 import io.kronosdb.protocol.Tail;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
@@ -40,12 +44,35 @@ import java.util.function.Function;
  */
 public class EventStoreChannel {
 
+    private static final Logger logger = LoggerFactory.getLogger(EventStoreChannel.class);
+
+    /** How long an append keeps being sent again unless configured otherwise: 30 seconds. */
+    public static final long DEFAULT_APPEND_RETRY_MILLIS = 30_000;
+
+    /** The first wait before an append is sent again, and the longest one. */
+    private static final long APPEND_RETRY_INITIAL_MS = 50;
+    private static final long APPEND_RETRY_MAX_MS = 2_000;
+
     private final Transport transport;
     private final String context;
+    private final long appendRetryMillis;
 
     EventStoreChannel(Transport transport, String context) {
+        this(transport, context, DEFAULT_APPEND_RETRY_MILLIS);
+    }
+
+    /**
+     * @param appendRetryMillis how long an append the server answered {@code unavailable}, or whose connection
+     *                          was lost before the answer, keeps being sent again; 0 never sends one again
+     */
+    EventStoreChannel(Transport transport, String context, long appendRetryMillis) {
+        if (appendRetryMillis < 0) {
+            throw new IllegalArgumentException("the append retry time must not be negative, not "
+                    + appendRetryMillis);
+        }
         this.transport = transport;
         this.context = context;
+        this.appendRetryMillis = appendRetryMillis;
     }
 
     // ---------------------------------------------------------------- append
@@ -65,15 +92,64 @@ public class EventStoreChannel {
      * or fails with {@link ConsistencyConflictException} when the condition
      * does not hold.
      *
+     * <p>An append the server answers with {@code unavailable}, or whose
+     * connection is lost before the answer arrives, may or may not have been
+     * written. It is sent again as it was: these events, with their
+     * identifiers, in this order, on a new connection if need be. The server
+     * recognises events it already holds and answers with the positions they
+     * have. This goes on, with a growing wait in between, for the channel's
+     * append retry time; after that the append fails with the last error.
+     * Any other error fails the append at once, and so does a conflict.
+     * An append is sent again only to a server that said in its handshake
+     * that it recognises one (KronosDB 0.17 or later); to any other it is
+     * sent once, and fails with that server's error.
+     * {@code events} must not change until the returned future completes.</p>
+     *
      * @param condition the consistency condition, or {@code null} for none
      */
     public CompletableFuture<Appended> append(@Nullable Condition condition, List<StoredRecord> events) {
-        CompletableFuture<Frame> reply = transport.withContext(context,
-                (connection, id) -> connection.request(new Append(id, condition, events)));
-        CompletableFuture<Appended> result = new CompletableFuture<>();
-        reply.whenComplete((frame, error) -> {
+        Appending appending = new Appending(condition, events);
+        appending.send();
+        return appending.result;
+    }
+
+    /** One append, from the first time it is sent until it is answered or given up. */
+    private final class Appending implements Transport.ContextCall<Frame>, BiConsumer<Frame, Throwable> {
+
+        final CompletableFuture<Appended> result = new CompletableFuture<>();
+        private final @Nullable Condition condition;
+        private final List<StoredRecord> events;
+        private final long startedAt = System.nanoTime();
+        private int sentAgain;
+        /** Why the append is being sent again; null the first time. */
+        private volatile @Nullable Throwable lastFailure;
+        /** The server that would get the append again does not recognise one. */
+        private volatile boolean notSentAgain;
+
+        Appending(@Nullable Condition condition, List<StoredRecord> events) {
+            this.condition = condition;
+            this.events = events;
+        }
+
+        void send() {
+            transport.withContext(context, this).whenComplete(this);
+        }
+
+        @Override
+        public CompletableFuture<Frame> apply(NativeConnection connection, int contextId) {
+            Throwable failure = lastFailure;
+            if (failure != null && !connection.retrySafeAppends()) {
+                // This server would write the events a second time.
+                notSentAgain = true;
+                return CompletableFuture.failedFuture(failure);
+            }
+            return connection.request(new Append(contextId, condition, events));
+        }
+
+        @Override
+        public void accept(Frame frame, Throwable error) {
             if (error != null) {
-                result.completeExceptionally(Failures.unwrap(error));
+                failed(Failures.unwrap(error));
             } else if (frame instanceof Appended appended) {
                 result.complete(appended);
             } else if (frame instanceof AppendConflict conflict) {
@@ -81,8 +157,48 @@ public class EventStoreChannel {
             } else {
                 result.completeExceptionally(unexpected(frame, "Appended"));
             }
-        });
-        return result;
+        }
+
+        private void failed(Throwable cause) {
+            if (notSentAgain || !outcomeUnknown(cause) || result.isDone()) {
+                result.completeExceptionally(cause);
+                return;
+            }
+            lastFailure = cause;
+            long elapsed = (System.nanoTime() - startedAt) / 1_000_000;
+            long left = appendRetryMillis - elapsed;
+            if (left <= 0) {
+                if (sentAgain > 0) {
+                    logger.info("Append to context [{}] was sent again {} times in {} ms and still failed: {}",
+                            context, sentAgain, elapsed, cause.getMessage());
+                }
+                result.completeExceptionally(cause);
+                return;
+            }
+            long delay = Math.min(Backoff.delay(++sentAgain, APPEND_RETRY_INITIAL_MS, APPEND_RETRY_MAX_MS), left);
+            logger.debug("Append to context [{}] failed ({}); sending it again in {} ms.", context, cause.getMessage(),
+                    delay);
+            transport.later(delay, this::sendAgain, () -> result.completeExceptionally(cause));
+        }
+
+        private void sendAgain() {
+            // The caller may have cancelled the append while it waited.
+            if (!result.isDone()) {
+                send();
+            }
+        }
+
+        /**
+         * Whether the append may be sent again: the server said {@code unavailable}, or the
+         * connection could not be opened or was lost, and the transport is still in use.
+         */
+        private boolean outcomeUnknown(Throwable cause) {
+            if (transport.isClosed()) {
+                return false;
+            }
+            return cause instanceof ConnectionClosedException
+                    || cause instanceof RequestFailedException failed && ErrorCode.UNAVAILABLE.equals(failed.code());
+        }
     }
 
     // ----------------------------------------------------------------- reads

@@ -19,6 +19,7 @@ public class KronosDbConnection {
     private final Transport transport;
     private final String context;
     private final @Nullable String busName;
+    private final long appendRetryMillis;
 
     private volatile boolean disconnected;
     private volatile @Nullable EventStoreChannel eventStoreChannel;
@@ -26,10 +27,11 @@ public class KronosDbConnection {
     private volatile @Nullable QueryChannel queryChannel;
     private volatile @Nullable PlatformChannel platformChannel;
 
-    KronosDbConnection(Transport transport, String context, @Nullable String busName) {
+    KronosDbConnection(Transport transport, String context, @Nullable String busName, long appendRetryMillis) {
         this.transport = Objects.requireNonNull(transport, "The Transport must not be null.");
         this.context = Objects.requireNonNull(context, "The context must not be null.");
         this.busName = busName;
+        this.appendRetryMillis = appendRetryMillis;
     }
 
     /**
@@ -39,7 +41,7 @@ public class KronosDbConnection {
         if (eventStoreChannel == null) {
             synchronized (this) {
                 if (eventStoreChannel == null) {
-                    eventStoreChannel = new EventStoreChannel(transport, context);
+                    eventStoreChannel = new EventStoreChannel(transport, context, appendRetryMillis);
                 }
             }
         }

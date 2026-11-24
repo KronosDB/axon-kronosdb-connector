@@ -9,7 +9,7 @@ Axon Framework applications can use KronosDB as their infrastructure backbone, i
 | | |
 |---|---|
 | Axon Framework | 5.3 or later (built against 5.4.1; CI runs 5.3.0, 5.3.3 and 5.4.1) |
-| KronosDB | 0.12 or later |
+| KronosDB | 0.17 or later |
 | Java | 21 |
 
 ## Install
@@ -135,6 +135,15 @@ Axon Framework 5.1 moved the distributed command bus, the distributed query bus 
 | `maxMessageSize` | `4MB` | Largest frame to send or accept; can only lower the limit the server announces |
 | `streamWindow` | `8MB` | Bytes (at least `65536`) the server may send on each stream ahead of your application: an event processor's stream, a read of the log, a query's results. An application that falls behind holds back its own stream and nothing else, and is never failed for it. Raise it for a link with a long round trip |
 | `queryTimeoutMillis` | `0` | How long a query may wait for its answer; `0` sends none, so the server's `[timeouts] query` (30 s by default) applies |
+| `appendRetryTimeoutMillis` | `30000` | How long (ms) an append keeps being sent again when the server answers it with `unavailable` or the connection is lost before its answer; `0` never sends one again |
+
+### Appends are sent again
+
+An append the server answers with `unavailable`, or whose connection is lost before the answer arrives, may or may not have been written. The connector sends it again as it was: the same events, with the same identifiers, in the same order, on a new connection if the old one is gone. KronosDB recognises the events it already holds and answers with the positions they have, so nothing is written twice and a conditional append is not refused by its own events.
+
+The connector asks for this in its handshake, and KronosDB 0.17 or later grants it. To a server that does not (an older one, or one with `retry-window-events = 0`), an append is sent once and fails with that server's error, because sending it again there would write the events a second time.
+
+The wait between attempts grows from 50 ms to 2 s, with jitter. After `appendRetryTimeoutMillis` the append fails with the last error. Any other error fails the append at once, and so does a consistency conflict, which is an answer and not an error.
 
 ## Building
 
@@ -169,6 +178,8 @@ mvn verify -Dkronosdb.native.addr=localhost:50051 \
 - `kronosdb.native.admin`: its admin HTTP address, for the tests that look at registered clients and processors and send processor instructions.
 - `kronosdb.native.short-timeouts`: the server was started with the short timeouts above.
 
+The append retry tests lose the answer to an append the server wrote and check that its events are in the log once. They need a server that recognises an append sent again (KronosDB 0.17 or later), which it says in its handshake; against one that does not they are skipped.
+
 `AuthNativeServerTest` needs a second server with authentication on. [`scripts/test-auth.toml`](scripts/test-auth.toml) is its config (throwaway tokens):
 
 ```bash
@@ -199,7 +210,7 @@ The wire format is generated in the KronosDB repository from `protocol/kronosdb.
 | `protocol/fixtures/` | The golden frames and their canonical JSON |
 | `src/test/java/io/kronosdb/protocol/` | `ConformanceTest` (every fixture decodes and re-encodes byte for byte), its JSON bridge, and `SchemaHashTest` |
 
-`scripts/vendor-protocol.sh <path to a KronosDB checkout>` refreshes all of it. It prints the new `SCHEMA_HASH`; pin that in `SchemaHashTest.PINNED_SCHEMA_HASH`. That one-line change is the review point for "the wire changed", and the conformance suite proves the new codec matches the new fixtures. Vendored with schema hash `7cc1b9b4`, native protocol version 2.
+`scripts/vendor-protocol.sh <path to a KronosDB checkout>` refreshes all of it. It prints the new `SCHEMA_HASH`; pin that in `SchemaHashTest.PINNED_SCHEMA_HASH`. That one-line change is the review point for "the wire changed", and the conformance suite proves the new codec matches the new fixtures. Vendored with schema hash `5dcacfb3`, native protocol version 2.
 
 ## License
 

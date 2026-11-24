@@ -39,6 +39,10 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  *       --heartbeat-timeout 4}, which the timeout tests rely on.</li>
  * </ul>
  *
+ * The append retry tests need a server that recognises an append sent again
+ * (KronosDB 0.17 or later). The server says so in its handshake, and they are
+ * skipped against one that does not.
+ *
  * Every test names its commands and queries uniquely, so tests share a server
  * with each other and with anything else on it.
  */
@@ -65,6 +69,16 @@ public final class RealServer {
     public static void requireShortTimeouts() {
         require();
         assumeTrue(SHORT_TIMEOUTS, "needs a server started with the short timeouts, see RealServer");
+    }
+
+    public static void requireRetrySafeAppends() {
+        require();
+        boolean granted;
+        try (Transport transport = transport(unique("retry-probe"))) {
+            granted = transport.connection().retrySafeAppends();
+        }
+        assumeTrue(granted,
+                "needs a server that recognises an append sent again (KronosDB 0.17 or later), see RealServer");
     }
 
     public static String host() {

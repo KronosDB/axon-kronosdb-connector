@@ -14,6 +14,13 @@ class BackoffTest {
     }
 
     @Test
+    void aDelayStartsAndStopsGrowingWhereItIsTold() {
+        assertThat(Backoff.delay(1, 50, 2000)).isBetween(50L, 62L);
+        assertThat(Backoff.delay(3, 50, 2000)).isBetween(200L, 250L);
+        assertThat(Backoff.delay(40, 50, 2000)).isBetween(2000L, 2500L);
+    }
+
+    @Test
     void streamsThatKeepEndingSoonAfterTheyOpenStartTheirNextReconnectLater() {
         Backoff.Flaps flaps = new Backoff.Flaps();
         assertThat(flaps.startAttempt()).isZero();

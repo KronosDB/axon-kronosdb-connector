@@ -38,6 +38,9 @@ public class KronosDbConfiguration {
     // How long a query may take; 0 leaves it to the server's [timeouts] query.
     private long queryTimeoutMillis = 0;
 
+    // How long an append the server could not confirm keeps being sent again; 0 never sends one again.
+    private long appendRetryTimeoutMillis = 30_000;
+
     public KronosDbConfiguration() {
     }
 
@@ -192,6 +195,22 @@ public class KronosDbConfiguration {
     }
 
     /**
+     * How long an append keeps being sent again, in milliseconds, when the
+     * server answers it with {@code unavailable} or the connection is lost
+     * before its answer. The same events go out each time, with the same
+     * identifiers, so the server recognises the ones it already wrote. After
+     * this long the append fails with the last error. {@code 0} never sends
+     * an append again; the default is 30 seconds.
+     */
+    public long getAppendRetryTimeoutMillis() {
+        return appendRetryTimeoutMillis;
+    }
+
+    public void setAppendRetryTimeoutMillis(long appendRetryTimeoutMillis) {
+        this.appendRetryTimeoutMillis = appendRetryTimeoutMillis;
+    }
+
+    /**
      * Convenience builder for creating configurations programmatically.
      */
     public static Builder builder() {
@@ -269,6 +288,12 @@ public class KronosDbConfiguration {
         /** How long a query may wait for its answer; 0 leaves it to the server. */
         public Builder queryTimeoutMillis(long millis) {
             config.queryTimeoutMillis = millis;
+            return this;
+        }
+
+        /** How long an append the server could not confirm keeps being sent again; 0 never sends one again. */
+        public Builder appendRetryTimeoutMillis(long millis) {
+            config.appendRetryTimeoutMillis = millis;
             return this;
         }
 

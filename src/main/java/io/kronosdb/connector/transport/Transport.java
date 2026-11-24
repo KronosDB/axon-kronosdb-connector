@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Owns the one native connection of a connector and replaces it when it is
@@ -23,7 +24,8 @@ public final class Transport implements AutoCloseable {
     private static final long RETRY_AFTER_NANOS = 250_000_000L;
 
     private final ConnectOptions options;
-    private final Object lock = new Object();
+    // Not a monitor: appends waiting to be sent again come here on virtual threads while one of them connects.
+    private final ReentrantLock lock = new ReentrantLock();
     private final ExecutorService handlers = Executors.newThreadPerTaskExecutor(
             Thread.ofVirtual().name("kronosdb-handler-", 0).factory());
 
@@ -42,7 +44,8 @@ public final class Transport implements AutoCloseable {
         if (connection != null && connection.isUsable()) {
             return connection;
         }
-        synchronized (lock) {
+        lock.lock();
+        try {
             if (closed) {
                 throw new ConnectionClosedException("the KronosDB connection factory has been shut down");
             }
@@ -69,6 +72,8 @@ public final class Transport implements AutoCloseable {
                 logger.debug("Replacing a draining KronosDB connection.");
             }
             return connection;
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -91,6 +96,26 @@ public final class Transport implements AutoCloseable {
             handlers.execute(loop);
         } catch (java.util.concurrent.RejectedExecutionException e) {
             // Shut down meanwhile.
+        }
+    }
+
+    /**
+     * Runs {@code task} on its own virtual thread after {@code delayMillis}.
+     * If the transport is shut down before that, {@code abandoned} runs instead.
+     */
+    void later(long delayMillis, Runnable task, Runnable abandoned) {
+        try {
+            handlers.execute(() -> {
+                try {
+                    Thread.sleep(delayMillis);
+                } catch (InterruptedException e) {
+                    abandoned.run();
+                    return;
+                }
+                task.run();
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            abandoned.run();
         }
     }
 
@@ -151,13 +176,16 @@ public final class Transport implements AutoCloseable {
 
     @Override
     public void close() {
-        synchronized (lock) {
+        lock.lock();
+        try {
             closed = true;
             NativeConnection connection = current;
             current = null;
             if (connection != null) {
                 connection.close();
             }
+        } finally {
+            lock.unlock();
         }
         handlers.shutdownNow();
     }

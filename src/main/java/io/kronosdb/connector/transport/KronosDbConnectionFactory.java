@@ -34,6 +34,7 @@ public class KronosDbConnectionFactory {
     private final String clientId;
     private final String componentName;
     private final @Nullable String busName;
+    private final long appendRetryMillis;
     private final Transport transport;
 
     private final Map<String, KronosDbConnection> connections = new ConcurrentHashMap<>();
@@ -42,6 +43,7 @@ public class KronosDbConnectionFactory {
         this.clientId = builder.clientId;
         this.componentName = builder.componentName;
         this.busName = builder.busName;
+        this.appendRetryMillis = builder.appendRetryMillis;
         this.transport = new Transport(new ConnectOptions(
                 builder.host,
                 builder.port,
@@ -72,7 +74,7 @@ public class KronosDbConnectionFactory {
 
     private KronosDbConnection createConnection(String context) {
         logger.info("Creating KronosDB connection for context [{}].", context);
-        return new KronosDbConnection(transport, context, busName);
+        return new KronosDbConnection(transport, context, busName, appendRetryMillis);
     }
 
     /**
@@ -137,6 +139,7 @@ public class KronosDbConnectionFactory {
         private long keepAliveTimeoutMillis = 5_000;
         private int maxFrame = 0;
         private int window = ConnectOptions.DEFAULT_WINDOW;
+        private long appendRetryMillis = EventStoreChannel.DEFAULT_APPEND_RETRY_MILLIS;
 
         Builder(String componentName, String clientId) {
             this.componentName = Objects.requireNonNull(componentName);
@@ -234,6 +237,22 @@ public class KronosDbConnectionFactory {
                         + ConnectOptions.MIN_WINDOW + " bytes, not " + bytes);
             }
             this.window = bytes;
+            return this;
+        }
+
+        /**
+         * How long an append keeps being sent again when the server answers it
+         * with {@code unavailable} or the connection is lost before its answer.
+         * The same events go out each time, so the server recognises the ones
+         * it already wrote. After this long the append fails with the last
+         * error. 0 never sends an append again; the default is 30 seconds.
+         */
+        public Builder appendRetryTimeout(long timeoutMillis) {
+            if (timeoutMillis < 0) {
+                throw new IllegalArgumentException("the append retry time must not be negative, not "
+                        + timeoutMillis);
+            }
+            this.appendRetryMillis = timeoutMillis;
             return this;
         }
 

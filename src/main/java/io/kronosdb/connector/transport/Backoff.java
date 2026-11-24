@@ -3,7 +3,7 @@ package io.kronosdb.connector.transport;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
-/** Exponential backoff with jitter for re-opening handler streams. */
+/** Exponential backoff with jitter, for re-opening handler streams and for sending an append again. */
 final class Backoff {
 
     private static final long INITIAL_MS = 500;
@@ -45,7 +45,15 @@ final class Backoff {
 
     /** The delay before attempt number {@code attempt}, counting from 1. */
     static long delay(int attempt) {
-        long delay = Math.min(INITIAL_MS * (1L << Math.min(attempt - 1, 20)), MAX_MS);
+        return delay(attempt, INITIAL_MS, MAX_MS);
+    }
+
+    /**
+     * The delay before attempt number {@code attempt}, counting from 1: {@code initialMs}
+     * doubled per attempt up to {@code maxMs}, plus up to a quarter of that as jitter.
+     */
+    static long delay(int attempt, long initialMs, long maxMs) {
+        long delay = Math.min(initialMs * (1L << Math.min(attempt - 1, 20)), maxMs);
         long jitter = (long) (delay * JITTER_FACTOR * ThreadLocalRandom.current().nextDouble());
         return delay + jitter;
     }
